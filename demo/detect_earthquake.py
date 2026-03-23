@@ -16,7 +16,33 @@ matplotlib.use("Agg")          # headless — swap to "TkAgg" / "Qt5Agg" for int
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-# ── Configuration ────────────────────────────────────────────────────────────
+# ── Configuration Profiles ───────────────────────────────────────────────────
+# Earthquake: long-duration seismic events (30+ seconds)
+# Table Knock: short impulse events on table (0.5-2 seconds)
+CONFIG_PROFILES = {
+    "earthquake": {
+        "BP_LOW_HZ": 1.0,
+        "BP_HIGH_HZ": 20.0,
+        "STA_WINDOW_S": 0.5,
+        "LTA_WINDOW_S": 10.0,
+        "STA_LTA_THRESH": 3.0,
+        "AMP_SIGMA_THRESH": 4.0,
+        "MERGE_GAP_S": 3.0,
+        "QUIET_GUARD_S": 8.0,
+    },
+    "table_knock": {
+        "BP_LOW_HZ": 2.0,
+        "BP_HIGH_HZ": 25.0,
+        "STA_WINDOW_S": 0.2,
+        "LTA_WINDOW_S": 5.0,
+        "STA_LTA_THRESH": 2.5,
+        "AMP_SIGMA_THRESH": 4.0,
+        "MERGE_GAP_S": 1.0,
+        "QUIET_GUARD_S": 2.0,
+    },
+}
+
+# Default configuration (can be overridden by load_config)
 SAMPLE_RATE      = 100     # Hz  (auto-detected if timestamps are present)
 BP_LOW_HZ        = 1.0     # bandpass low  cut (Hz)
 BP_HIGH_HZ       = 20.0    # bandpass high cut (Hz)
@@ -28,6 +54,31 @@ MERGE_GAP_S      = 3.0     # merge spikes closer than this (seconds)
 QUIET_GUARD_S    = 8.0     # calm period required before closing the event
 OUTPUT_IMAGE     = "earthquake_report.png"
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def load_config(mode: str = "earthquake") -> None:
+    """
+    Load configuration profile by name.
+
+    Args:
+        mode: "earthquake" or "table_knock"
+    """
+    global BP_LOW_HZ, BP_HIGH_HZ, STA_WINDOW_S, LTA_WINDOW_S
+    global STA_LTA_THRESH, AMP_SIGMA_THRESH, MERGE_GAP_S, QUIET_GUARD_S
+
+    if mode not in CONFIG_PROFILES:
+        raise ValueError(f"Unknown mode: {mode}. Choose from {list(CONFIG_PROFILES.keys())}")
+
+    cfg = CONFIG_PROFILES[mode]
+    BP_LOW_HZ = cfg["BP_LOW_HZ"]
+    BP_HIGH_HZ = cfg["BP_HIGH_HZ"]
+    STA_WINDOW_S = cfg["STA_WINDOW_S"]
+    LTA_WINDOW_S = cfg["LTA_WINDOW_S"]
+    STA_LTA_THRESH = cfg["STA_LTA_THRESH"]
+    AMP_SIGMA_THRESH = cfg["AMP_SIGMA_THRESH"]
+    MERGE_GAP_S = cfg["MERGE_GAP_S"]
+    QUIET_GUARD_S = cfg["QUIET_GUARD_S"]
+    print(f"Loaded '{mode}' configuration profile")
 
 
 # ── Stage 1 — Data ingestion ─────────────────────────────────────────────────
@@ -247,11 +298,12 @@ def print_report(window: tuple[int, int] | None,
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-def main():
+def main(mode: str = "earthquake"):
     path = sys.argv[1] if len(sys.argv) > 1 else "accelerometer_data.csv"
 
     print("\n=== Earthquake Detection Pipeline ===\n")
 
+    load_config(mode)
     print("[1/7] Loading data...")
     t_s, mag, fs, timestamps = load_data(path)
 
