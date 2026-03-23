@@ -90,17 +90,25 @@ def load_data(path: str) -> tuple[np.ndarray, np.ndarray, float]:
     # Detect timestamp column
     time_col = next((c for c in df.columns if "time" in c), None)
     if time_col:
-        df[time_col] = pd.to_datetime(df[time_col])
-        t_s = (df[time_col] - df[time_col].iloc[0]).dt.total_seconds().values
-        fs = round(1.0 / np.median(np.diff(t_s)))
+        col = df[time_col]
+        # Float seconds (e.g. 0.062, 0.076) — use directly
+        if pd.api.types.is_numeric_dtype(col):
+            t_s = (col - col.iloc[0]).values.astype(float)
+        else:
+            col = pd.to_datetime(col)
+            t_s = (col - col.iloc[0]).dt.total_seconds().values
+        dt = np.median(np.diff(t_s))
+        fs = round(1.0 / dt) if dt > 0 else SAMPLE_RATE
     else:
         fs = SAMPLE_RATE
         t_s = np.arange(len(df)) / fs
 
-    # Compute vector magnitude
+    # Compute vector magnitude — support both x/y/z and ax/ay/az column names
     axes = [c for c in ("x", "y", "z") if c in df.columns]
     if not axes:
-        raise ValueError("CSV must contain columns x, y, z (or timestamp, x, y, z).")
+        axes = [c for c in ("ax", "ay", "az") if c in df.columns]
+    if not axes:
+        raise ValueError("CSV must contain columns x,y,z or ax,ay,az.")
     mag = np.sqrt(sum(df[a].values ** 2 for a in axes))
 
     print(f"Loaded {len(mag):,} samples  |  fs = {fs} Hz  |  duration = {t_s[-1]:.1f} s")
