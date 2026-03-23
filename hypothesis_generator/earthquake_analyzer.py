@@ -33,8 +33,6 @@ if not HF_TOKEN:
 # Configuration
 # ------------------------------
 
-SERVICE_NAME = "jass_earthquake_analysis"
-AGENT_NAME = "earthquake_agent"
 CSV_FILE_PATH = "/Users/satya/Desktop/JASS26/Code/JASS-ORB/JASS-Earthquake/earthquake_data.csv"
 ANALYSIS_INTERVAL_SECONDS = 60  # Run analysis every 5 minutes (adjust as needed)
 
