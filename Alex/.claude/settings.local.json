@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python3 -m pip install pandas numpy tensorflow scikit-learn -q)",
+      "Bash(python3:*)",
+      "Bash(ls -lah /Users/xoda/Documents/CSAI/EartQuake/*.h5 /Users/xoda/Documents/CSAI/EartQuake/*.pkl /Users/xoda/Documents/CSAI/EartQuake/*.png)",
+      "WebSearch",
+      "Bash(wget -q https://data.mendeley.com/public-files/datasets/zsrk4cngtr/files/zsrk4cngtr_download_20220802.zip -O mems_dataset.zip)",
+      "Bash(curl -L -o mems_dataset.zip \"https://data.mendeley.com/public-files/datasets/zsrk4cngtr/files/zsrk4cngtr_download_20220802.zip\")",
+      "WebFetch(domain:github.com)",
+      "Bash(ls -lh /Users/xoda/Documents/CSAI/EartQuake/*.h5 /Users/xoda/Documents/CSAI/EartQuake/*.pkl /Users/xoda/Documents/CSAI/EartQuake/*.png)",
+      "Bash(ls -lh /Users/xoda/Documents/CSAI/EartQuake/*.h5 /Users/xoda/Documents/CSAI/EartQuake/*.pkl)"
+    ]
+  }
+}
