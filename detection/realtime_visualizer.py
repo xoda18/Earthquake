@@ -19,6 +19,8 @@ from collections import deque
 from typing import Tuple, Optional
 import numpy as np
 
+import os
+os.environ["MPLBACKEND"] = "TkAgg"  # must be set before any matplotlib import
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -33,6 +35,19 @@ from detect_earthquake import (
     load_config, preprocess, sta_lta, detect_spikes,
     find_event_window, CONFIG_PROFILES
 )
+
+# Add "optimized" profile if it doesn't exist
+if "optimized" not in CONFIG_PROFILES:
+    CONFIG_PROFILES["optimized"] = {
+        "BP_LOW_HZ": 1.5,
+        "BP_HIGH_HZ": 22.0,
+        "STA_WINDOW_S": 0.3,
+        "LTA_WINDOW_S": 7.0,
+        "STA_LTA_THRESH": 5.0,
+        "AMP_SIGMA_THRESH": 5.0,
+        "MERGE_GAP_S": 2.0,
+        "QUIET_GUARD_S": 4.0,
+    }
 
 
 class RealtimeVisualizer:
@@ -122,15 +137,13 @@ class RealtimeVisualizer:
         Returns:
             (event_window, metrics) where event_window = (start_idx, end_idx) or None.
         """
-        if len(self.buffer.data) < 100:
+        if len(self.buffer) < 100:
             return None, {}
 
-        # Extract data from buffer
-        data_array = self.buffer.get_numpy_data()
-        timestamps = data_array[:, 0]
-        x = data_array[:, 1]
-        y = data_array[:, 2]
-        z = data_array[:, 3]
+        # Extract data from buffer — get_numpy_data returns 4 separate arrays
+        timestamps, x, y, z = self.buffer.get_numpy_data()
+        if len(timestamps) < 100:
+            return None, {}
 
         # Compute magnitude
         mag = np.sqrt(x**2 + y**2 + z**2)
@@ -239,9 +252,9 @@ class RealtimeVisualizer:
         timestamps = metrics["timestamps"]
         spikes = metrics["spikes"]
 
-        # Convert timestamps to relative seconds
+        # Convert timestamps to relative seconds (already in seconds from read_sample)
         if len(timestamps) > 0:
-            t_s = (timestamps - timestamps[0]) / 1000.0
+            t_s = timestamps - timestamps[0]
         else:
             return
 
@@ -319,13 +332,11 @@ class RealtimeVisualizer:
         )
         self.axes["ratio"].fill_between(t_s, 0, ratio, alpha=0.2, color="purple")
 
-        # Highlight spikes
+        # Highlight spikes (spikes is list of (start, end) tuples)
         if len(spikes) > 0:
-            spike_indices = np.where(spikes)[0]
-            if len(spike_indices) > 0:
-                self.axes["ratio"].scatter(
-                    t_s[spike_indices], ratio[spike_indices], color="red", s=30, zorder=5, label="Spikes"
-                )
+            for s_start, s_end in spikes:
+                if s_start < len(t_s):
+                    self.axes["ratio"].axvline(t_s[s_start], color="red", alpha=0.5, linewidth=1)
 
         # Highlight earthquake window
         if event_window:
