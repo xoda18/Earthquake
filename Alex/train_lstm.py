@@ -8,15 +8,15 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, recall_score, precision_score, confusion_matrix
 import matplotlib.pyplot as plt
 
-print("📊 Загружаю данные...")
+print("📊 Loading data...")
 
-# Параметры окна
-WINDOW_SIZE = 100  # Отсчётов на окно (1.0 сек при 100 Гц — соответствует сенсору MPU6500)
-STRIDE = 50        # Сдвиг окна (для создания больше примеров)
+# Window parameters
+WINDOW_SIZE = 100  # Samples per window (1.0 sec at 100 Hz — matches MPU6500 sensor)
+STRIDE = 50        # Window stride (to create more samples)
 
-# ============= ЗАГРУЗИТЬ ДАННЫЕ =============
+# ============= LOAD DATA =============
 def load_waveforms(filepath, label):
-    """Загружает данные из HDF5 и создаёт окна"""
+    """Load data from HDF5 and create windows"""
     with h5py.File(filepath, 'r') as f:
         data = f['data/bucket0'][:]  # (328, 3, 25001)
 
@@ -26,7 +26,7 @@ def load_waveforms(filepath, label):
     for i in range(len(data)):
         waveform = data[i]  # (3, 25001)
 
-        # Создаём окна с stride
+        # Create windows with stride
         for start in range(0, waveform.shape[1] - WINDOW_SIZE, STRIDE):
             window = waveform[:, start:start + WINDOW_SIZE]  # (3, 100)
             X_windows.append(window)
@@ -34,41 +34,41 @@ def load_waveforms(filepath, label):
 
     return np.array(X_windows), np.array(y_labels)
 
-# Загрузить землетрясения (класс 1)
-print("📍 Загружаю землетрясения...")
+# Load earthquakes (class 1)
+print("📍 Loading earthquakes...")
 X_eq, y_eq = load_waveforms('Dataset_Central/dataset_earthquakes/waveforms.hdf5', label=1)
-print(f"   Окон землетрясений: {len(X_eq)}")
+print(f"   Earthquake windows: {len(X_eq)}")
 
-# Загрузить шум (класс 0)
-print("📍 Загружаю фоновый шум...")
+# Load noise (class 0)
+print("📍 Loading background noise...")
 X_noise, y_noise = load_waveforms('Dataset_Central/dataset_noise/waveforms.hdf5', label=0)
-print(f"   Окон шума: {len(X_noise)}")
+print(f"   Noise windows: {len(X_noise)}")
 
-# Объединить
+# Combine
 X = np.vstack([X_eq, X_noise])  # (N_samples, 3, 100)
 y = np.hstack([y_eq, y_noise])
 
-print(f"\n✅ Всего примеров: {len(X)}")
-print(f"   Класс 0 (шум): {(y == 0).sum()}")
-print(f"   Класс 1 (землетрясение): {(y == 1).sum()}")
+print(f"\n✅ Total samples: {len(X)}")
+print(f"   Class 0 (noise): {(y == 0).sum()}")
+print(f"   Class 1 (earthquake): {(y == 1).sum()}")
 
-# ============= НОРМАЛИЗОВАТЬ ДАННЫЕ =============
-print("\n🔧 Нормализую данные...")
+# ============= NORMALIZE DATA =============
+print("\n🔧 Normalizing data...")
 X_reshaped = X.reshape(-1, WINDOW_SIZE)  # (N_samples * 3, 100)
 scaler = StandardScaler()
 X_reshaped = scaler.fit_transform(X_reshaped)
 X = X_reshaped.reshape(-1, 3, WINDOW_SIZE)
 
-# ============= РАЗДЕЛИТЬ НА ОБУЧЕНИЕ И ТЕСТ =============
-print("📊 Разделяю на обучение (90%) и тест (10%)...")
+# ============= SPLIT INTO TRAIN AND TEST =============
+print("📊 Splitting into train (90%) and test (10%)...")
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.1, random_state=42, stratify=y
 )
-print(f"   Обучение: {len(X_train)} примеров")
-print(f"   Тест: {len(X_test)} примеров")
+print(f"   Train: {len(X_train)} samples")
+print(f"   Test: {len(X_test)} samples")
 
-# ============= ПОСТРОИТЬ LSTM НЕЙРОСЕТЬ =============
-print("\n🧠 Строю LSTM нейросеть для временных рядов...")
+# ============= BUILD LSTM NEURAL NETWORK =============
+print("\n🧠 Building LSTM neural network for time series...")
 model = keras.Sequential([
     keras.layers.LSTM(64, activation='relu', input_shape=(3, WINDOW_SIZE), return_sequences=True),
     keras.layers.Dropout(0.2),
@@ -86,8 +86,8 @@ model.compile(
 
 print(model.summary())
 
-# ============= ОБУЧИТЬ =============
-print("\n⏳ Обучаю модель (это займёт несколько минут)...")
+# ============= TRAIN =============
+print("\n⏳ Training model (this will take a few minutes)...")
 history = model.fit(
     X_train, y_train,
     epochs=30,
@@ -96,8 +96,8 @@ history = model.fit(
     verbose=1
 )
 
-# ============= ТЕСТИРОВАТЬ =============
-print("\n📈 Тестирую модель на новых данных...")
+# ============= TEST =============
+print("\n📈 Testing model on new data...")
 y_pred_proba = model.predict(X_test, verbose=0)
 y_pred = (y_pred_proba > 0.5).astype(int).flatten()
 
@@ -105,29 +105,29 @@ accuracy = accuracy_score(y_test, y_pred)
 recall = recall_score(y_test, y_pred)
 precision = precision_score(y_test, y_pred)
 
-print(f"\n✅ РЕЗУЛЬТАТЫ НА ТЕСТОВЫХ ДАННЫХ (10%):")
-print(f"   Точность (Accuracy):      {accuracy * 100:.2f}%")
-print(f"   Полнота (Recall):         {recall * 100:.2f}%")
-print(f"   Аккуратность (Precision): {precision * 100:.2f}%")
+print(f"\n✅ RESULTS ON TEST DATA (10%):")
+print(f"   Accuracy:  {accuracy * 100:.2f}%")
+print(f"   Recall:    {recall * 100:.2f}%")
+print(f"   Precision: {precision * 100:.2f}%")
 
 cm = confusion_matrix(y_test, y_pred)
-print(f"\n🎯 Матрица ошибок:")
-print(f"   Правильно класс 0 (шум):           {cm[0,0]}")
-print(f"   Неправильно как класс 1:           {cm[0,1]}")
-print(f"   Неправильно как класс 0:           {cm[1,0]}")
-print(f"   Правильно класс 1 (землетрясение): {cm[1,1]}")
+print(f"\n🎯 Confusion matrix:")
+print(f"   TN (noise correct):        {cm[0,0]}")
+print(f"   FP (false earthquake):     {cm[0,1]}")
+print(f"   FN (missed earthquake):    {cm[1,0]}")
+print(f"   TP (earthquake correct):   {cm[1,1]}")
 
-# ============= СОХРАНИТЬ =============
-print("\n💾 Сохраняю модель...")
+# ============= SAVE =============
+print("\n💾 Saving model...")
 model.save('lstm_earthquake_model.h5')
-print("✅ Модель сохранена в lstm_earthquake_model.h5")
+print("✅ Model saved to lstm_earthquake_model.h5")
 
 import pickle
 with open('lstm_scaler.pkl', 'wb') as f:
     pickle.dump(scaler, f)
-print("✅ Нормализатор сохранён в lstm_scaler.pkl")
+print("✅ Scaler saved to lstm_scaler.pkl")
 
-# ============= ГРАФИК =============
+# ============= PLOT =============
 plt.figure(figsize=(12, 4))
 plt.subplot(1, 2, 1)
 plt.plot(history.history['loss'], label='Training Loss')
@@ -147,6 +147,6 @@ plt.title('Accuracy During Training')
 
 plt.tight_layout()
 plt.savefig('lstm_training_history.png', dpi=100)
-print("✅ График сохранён в lstm_training_history.png")
+print("✅ Plot saved to lstm_training_history.png")
 
-print("\n🎉 Обучение завершено!")
+print("\n🎉 Training complete!")

@@ -1,5 +1,5 @@
 """
-Тест обученной модели на независимо сгенерированных данных
+Test trained model on independently generated data
 """
 import pandas as pd
 import numpy as np
@@ -9,19 +9,19 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
 import sys
 
-print("🧪 ТЕСТИРОВАНИЕ МОДЕЛИ НА СГЕНЕРИРОВАННЫХ ДАННЫХ\n")
+print("🧪 MODEL TESTING ON GENERATED DATA\n")
 
-# Параметры окна (как при обучении)
+# Window parameters (same as during training)
 WINDOW_SIZE = 100
 STRIDE = 50
 
-# Загрузить модель
-print("🧠 Загружаю модель...")
+# Load model
+print("🧠 Loading model...")
 model = keras.models.load_model('../lstm_earthquake_model.h5')
 with open('../lstm_scaler.pkl', 'rb') as f:
     scaler = pickle.load(f)
 
-# Загрузить все CSV файлы
+# Load all CSV files
 csv_files = ['earthquake_noise.csv', 'earthquake_weak.csv',
              'earthquake_moderate.csv', 'earthquake_strong.csv']
 
@@ -29,11 +29,11 @@ results_summary = []
 all_predictions = []
 all_true_labels = []
 
-print(f"\n{'Файл':<25} {'Истина':<15} {'Предсказано':<15} {'Вероятность':<15} {'Статус'}")
+print(f"\n{'File':<25} {'True':<15} {'Predicted':<15} {'Probability':<15} {'Status'}")
 print("=" * 85)
 
 for csv_file in csv_files:
-    # Загрузить данные
+    # Load data
     df = pd.read_csv(csv_file)
     data = df[['x', 'y', 'z']].values
     true_label = df['label'].iloc[0]
@@ -57,8 +57,8 @@ for csv_file in csv_files:
 
     # Определить класс
     pred_label = 1 if mean_prob > 0.5 else 0
-    true_class = "Землетрясение" if true_label == 1 else "Спокойно"
-    pred_class = "Землетрясение" if pred_label == 1 else "Спокойно"
+    true_class = "EARTHQUAKE" if true_label == 1 else "QUIET"
+    pred_class = "EARTHQUAKE" if pred_label == 1 else "QUIET"
     status = "✅" if pred_label == true_label else "❌"
 
     # Сохранить результаты
@@ -74,9 +74,9 @@ for csv_file in csv_files:
 
     print(f"{csv_file:<25} {true_class:<15} {pred_class:<15} {mean_prob:>6.1%}{'':<8} {status}")
 
-# Общие метрики
+# Overall metrics
 print("\n" + "=" * 85)
-print("📊 ОБЩИЕ МЕТРИКИ")
+print("📊 OVERALL METRICS")
 print("=" * 85)
 
 y_true = np.array(all_true_labels)
@@ -87,25 +87,25 @@ recall = recall_score(y_true, y_pred)
 precision = precision_score(y_true, y_pred)
 f1 = f1_score(y_true, y_pred)
 
-print(f"Accuracy (Точность):     {accuracy:.1%}")
-print(f"Recall (Полнота):        {recall:.1%}")
-print(f"Precision (Аккуратность):{precision:.1%}")
-print(f"F1-Score:                {f1:.1%}")
+print(f"Accuracy:  {accuracy:.1%}")
+print(f"Recall:    {recall:.1%}")
+print(f"Precision: {precision:.1%}")
+print(f"F1-Score:  {f1:.1%}")
 
 cm = confusion_matrix(y_true, y_pred)
 tn, fp, fn, tp = cm.ravel()
 
-print(f"\nМатрица ошибок:")
-print(f"  TN={tn} (спокойно верно)    FP={fp} (ложное землетрясение)")
-print(f"  FN={fn} (пропустили)        TP={tp} (землетрясение верно)")
+print(f"\nConfusion matrix:")
+print(f"  TN={tn} (quiet correct)      FP={fp} (false earthquake)")
+print(f"  FN={fn} (missed)             TP={tp} (earthquake correct)")
 
 if accuracy == 1.0:
-    print("\n🎉 ИДЕАЛЬНО! Модель на 100% верна!")
+    print("\n🎉 PERFECT! Model is 100% accurate!")
 elif accuracy >= 0.75:
-    print("\n✅ ХОРОШО! Модель работает надёжно")
+    print("\n✅ GOOD! Model works reliably")
 elif accuracy >= 0.5:
-    print("\n⚠️ СРЕДНЕЕ. Нужна доработка")
+    print("\n⚠️ AVERAGE. Needs improvement")
 else:
-    print("\n❌ ПЛОХО. Требуется переобучение")
+    print("\n❌ POOR. Retraining required")
 
-print("\n🎉 Тестирование завершено!")
+print("\n🎉 Testing complete!")
