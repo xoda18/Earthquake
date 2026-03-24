@@ -11,8 +11,10 @@ import sys
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, sosfiltfilt
+import os as _os
 import matplotlib
-matplotlib.use("Agg")          # headless — swap to "TkAgg" / "Qt5Agg" for interactive
+if not _os.environ.get("MPLBACKEND"):
+    matplotlib.use("Agg")      # headless default — overridden by MPLBACKEND env var
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 

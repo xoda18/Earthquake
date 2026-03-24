@@ -102,8 +102,8 @@ class MPU6050Reader:
 
         try:
             parts = line.split(",")
-            if len(parts) != 4:
-                raise ValueError(f"Expected 4 fields, got {len(parts)}")
+            if len(parts) not in (4, 7):
+                raise ValueError(f"Expected 4 or 7 fields, got {len(parts)}")
 
             ts_ms = float(parts[0])
             x_g = float(parts[1])
