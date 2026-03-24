@@ -95,9 +95,9 @@ class IndependentEarthquakeGenerator:
 
         df = pd.DataFrame({
             'timestamp': timestamps,
-            'x': data[:, 0].astype(int),
-            'y': data[:, 1].astype(int),
-            'z': data[:, 2].astype(int),
+            'x': data[:, 0],
+            'y': data[:, 1],
+            'z': data[:, 2],
             'label': label
         })
 

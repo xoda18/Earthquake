@@ -1,6 +1,7 @@
 """
 Test trained model on independently generated data
 """
+import os
 import pandas as pd
 import numpy as np
 import pickle
@@ -17,8 +18,9 @@ STRIDE = 50
 
 # Load model
 print("🧠 Loading model...")
-model = keras.models.load_model('../lstm_earthquake_model.h5')
-with open('../lstm_scaler.pkl', 'rb') as f:
+_dir = os.path.dirname(os.path.abspath(__file__))
+model = keras.models.load_model(os.path.join(_dir, '..', 'lstm_earthquake_model.h5'))
+with open(os.path.join(_dir, '..', 'lstm_scaler.pkl'), 'rb') as f:
     scaler = pickle.load(f)
 
 # Load all CSV files
@@ -34,7 +36,7 @@ print("=" * 85)
 
 for csv_file in csv_files:
     # Load data
-    df = pd.read_csv(csv_file)
+    df = pd.read_csv(os.path.join(_dir, csv_file))
     data = df[['x', 'y', 'z']].values
     true_label = df['label'].iloc[0]
 
