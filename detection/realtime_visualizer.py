@@ -59,6 +59,9 @@ class RealtimeVisualizer:
         duration: int = 60,
         mode: str = "optimized",
         save_csv: Optional[str] = None,
+        print_data: bool = False,
+        from_csv: Optional[str] = None,
+        from_blackboard: Optional[str] = None,
     ):
         """
         Initialize visualizer.
@@ -74,7 +77,11 @@ class RealtimeVisualizer:
         self.duration = duration
         self.mode = mode
         self.save_csv = save_csv
+        self.print_data = print_data
+        self.from_csv = from_csv
+        self.from_blackboard = from_blackboard
         self.running = False
+        self.last_print_time = 0
         self.samples_collected = []
         self.earthquake_regions = []  # List of (start, end) indices
         self.detection_count = 0
@@ -96,19 +103,30 @@ class RealtimeVisualizer:
         self.axes = {}
 
     def reader_thread_func(self):
-        """Background thread: read from hardware and append to buffer."""
+        """Background thread: read from hardware or tail CSV file."""
+        csv_out_file = None
+        csv_writer = None
+
+        if self.from_blackboard:
+            self._read_from_blackboard()
+            return
+        if self.from_csv:
+            self._read_from_csv()
+            return
+
         try:
             self.reader.connect()
             start_time = time.time()
 
-            # Optional CSV writer
-            csv_file = None
-            csv_writer = None
             if self.save_csv:
                 import csv
-                csv_file = open(self.save_csv, "w")
-                csv_writer = csv.writer(csv_file)
-                csv_writer.writerow(["timestamp_ms", "x_g", "y_g", "z_g"])
+                csv_out_file = open(self.save_csv, "w")
+                csv_writer = csv.writer(csv_out_file)
+                csv_writer.writerow(["timestamp_s", "ax", "ay", "az"])
+
+            if self.print_data:
+                print(f"{'Time':>8}  {'ax':>7}  {'ay':>7}  {'az':>7}  {'|a|':>7}")
+                print("-" * 46)
 
             while self.running and (time.time() - start_time) < self.duration:
                 try:
@@ -119,6 +137,14 @@ class RealtimeVisualizer:
                     if csv_writer:
                         csv_writer.writerow(sample)
 
+                    if self.print_data:
+                        now = time.time()
+                        if now - self.last_print_time >= 0.2:
+                            self.last_print_time = now
+                            ts, ax, ay, az = sample
+                            mag = (ax**2 + ay**2 + az**2) ** 0.5
+                            print(f"{ts:8.2f}  {ax:7.4f}  {ay:7.4f}  {az:7.4f}  {mag:7.4f}")
+
                 except Exception as e:
                     print(f"Reader warning: {e}", file=sys.stderr)
 
@@ -126,9 +152,99 @@ class RealtimeVisualizer:
             print(f"Reader error: {e}", file=sys.stderr)
         finally:
             self.reader.disconnect()
-            if csv_file:
-                csv_file.close()
-                print(f"✓ Saved to {self.save_csv}")
+            if csv_out_file:
+                csv_out_file.close()
+                print(f"Saved to {self.save_csv}")
+
+    def _read_from_csv(self):
+        """Tail a growing CSV file, appending samples to buffer."""
+        print(f"Reading from CSV: {self.from_csv}")
+        start_time = time.time()
+        file_pos = 0
+
+        while self.running and (time.time() - start_time) < self.duration:
+            try:
+                with open(self.from_csv, "r") as f:
+                    f.seek(file_pos)
+                    new_lines = f.readlines()
+                    file_pos = f.tell()
+
+                for line in new_lines:
+                    line = line.strip()
+                    if not line or line.startswith("timestamp") or line.startswith("#"):
+                        continue
+                    parts = line.split(",")
+                    if len(parts) < 4:
+                        continue
+                    try:
+                        ts = float(parts[0])
+                        ax, ay, az = float(parts[1]), float(parts[2]), float(parts[3])
+                        self.buffer.append((ts, ax, ay, az))
+                        self.samples_collected.append((ts, ax, ay, az))
+                    except ValueError:
+                        continue
+
+                time.sleep(0.05)
+
+            except FileNotFoundError:
+                time.sleep(0.2)
+            except Exception as e:
+                time.sleep(0.1)
+
+    def _read_from_blackboard(self):
+        """Poll blackboard API for sensor data posted by Docker."""
+        import requests
+        import json
+
+        url = self.from_blackboard
+        print(f"Polling blackboard: {url}")
+        start_time = time.time()
+        sample_idx = 0
+        last_ts = 0
+
+        while self.running and (time.time() - start_time) < self.duration:
+            try:
+                resp = requests.get(url, timeout=2)
+                if resp.status_code != 200:
+                    time.sleep(0.3)
+                    continue
+
+                data = resp.json()
+                # Find earthquake_sensor entries
+                entries = data if isinstance(data, list) else data.get("entries", [data])
+
+                for entry in entries:
+                    if entry.get("type") != "earthquake_sensor":
+                        continue
+                    try:
+                        content = json.loads(entry.get("content", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+
+                    ts = content.get("timestamp", 0)
+                    if ts <= last_ts:
+                        continue  # already seen
+                    last_ts = ts
+
+                    ax = content.get("ax", 0)
+                    ay = content.get("ay", 0)
+                    az = content.get("az", 0)
+
+                    sample = (float(sample_idx) / 100.0, ax, ay, az)
+                    self.buffer.append(sample)
+                    self.samples_collected.append(sample)
+                    sample_idx += 1
+
+                    if self.print_data:
+                        prob = content.get("probability", 0)
+                        label = content.get("label", "?")
+                        mag = content.get("magnitude_g", 0)
+                        print(f"  BB: ax={ax:.4f} ay={ay:.4f} az={az:.4f} |a|={mag:.4f} prob={prob:.1%} {label}")
+
+                time.sleep(0.3)  # poll 3 times/sec
+
+            except Exception as e:
+                time.sleep(0.5)
 
     def analyze_buffer(self) -> Tuple[Optional[Tuple[int, int]], dict]:
         """
@@ -148,40 +264,31 @@ class RealtimeVisualizer:
         # Compute magnitude
         mag = np.sqrt(x**2 + y**2 + z**2)
 
-        # Preprocess (DC removal + bandpass)
-        fs = self.buffer.sample_rate
-        try:
-            filtered = preprocess(mag, fs)
-        except:
-            return None, {}
-
-        # Compute STA/LTA
-        try:
-            ratio = sta_lta(filtered, fs)
-        except:
-            return None, {}
-
-        # Detect spikes
-        try:
-            spikes = detect_spikes(ratio, filtered, fs)
-        except:
-            return None, {}
-
-        # Find event window
-        event_window = find_event_window(spikes, ratio, fs)
-
+        # Always return raw data even if detection fails
         metrics = {
             "timestamps": timestamps,
             "x": x,
             "y": y,
             "z": z,
             "mag": mag,
-            "filtered": filtered,
-            "ratio": ratio,
-            "spikes": spikes,
+            "filtered": np.zeros_like(mag),
+            "ratio": np.zeros_like(mag),
+            "spikes": [],
         }
 
-        return event_window, metrics
+        # Try detection pipeline — if it fails, plots still update with raw data
+        fs = self.buffer.sample_rate
+        try:
+            filtered = preprocess(mag, fs)
+            ratio = sta_lta(filtered, fs)
+            spikes = detect_spikes(ratio, filtered, fs)
+            event_window = find_event_window(spikes, ratio, fs)
+            metrics["filtered"] = filtered
+            metrics["ratio"] = ratio
+            metrics["spikes"] = spikes
+            return event_window, metrics
+        except Exception:
+            return None, metrics
 
     def setup_figure(self):
         """Create matplotlib figure with 5 subplots."""
@@ -470,6 +577,18 @@ def main():
     parser.add_argument(
         "--save-csv", type=str, default=None, help="Save recording to CSV file"
     )
+    parser.add_argument(
+        "--print", dest="print_data", action="store_true",
+        help="Also print data to terminal (5 Hz)"
+    )
+    parser.add_argument(
+        "--from-csv", type=str, default=None,
+        help="Read from a growing CSV file instead of serial port"
+    )
+    parser.add_argument(
+        "--from-blackboard", type=str, default=None,
+        help="Read from blackboard API (e.g. https://blackboard.jass.school/blackboard)"
+    )
 
     args = parser.parse_args()
 
@@ -478,6 +597,9 @@ def main():
         duration=args.duration,
         mode=args.mode,
         save_csv=args.save_csv,
+        print_data=args.print_data,
+        from_csv=args.from_csv,
+        from_blackboard=args.from_blackboard,
     )
     visualizer.run()
 

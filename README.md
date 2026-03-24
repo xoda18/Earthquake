@@ -2,6 +2,45 @@
 
 Real-time earthquake detection using MPU6500 accelerometer + Arduino + LSTM neural network in Docker.
 
+# For me
+
+```bash
+docker run --rm --device /dev/ttyACM0 earthquake-detector --profile table
+
+#visualizing 
+
+● Одна программа, всё параллельно внутри:
+
+  cd ~/Desktop/NUP/JASS/Earthquake && source ../venv/bin/activate
+
+  # Всё вместе: данные + детекция + blackboard + графики
+  python3 detection/streaming/stream.py --detect --blackboard --viz
+
+  # Без графиков
+  python3 detection/streaming/stream.py --detect --blackboard
+
+  # Только данные
+  python3 detection/streaming/stream.py
+
+  # Данные + графики (без blackboard)
+  python3 detection/streaming/stream.py --viz
+
+  # С сохранением в CSV
+  python3 detection/streaming/stream.py --detect --blackboard --viz --save
+   data.csv
+
+  Флаги:
+  - --detect — STA/LTA детекция
+  - --blackboard — отправка на blackboard
+  - --viz — живые графики (убрать флаг = без графиков)
+  - --save FILE — сохранить CSV
+  - --mode — earthquake / table_knock / optimized
+
+✻ Churned for 1m 20s
+
+
+```
+
 ## Setup
 
 ```bash
@@ -24,6 +63,7 @@ docker run --rm --device /dev/ttyACM0 earthquake-detector
 # Silent — only prints when earthquake detected
 docker run --rm --device /dev/ttyACM0 earthquake-detector --profile table --mode magnitude
 ```
+
 
 ## Profiles
 

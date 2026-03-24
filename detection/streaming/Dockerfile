@@ -7,7 +7,8 @@ RUN pip install --no-cache-dir \
     scikit-learn \
     pyserial \
     numpy \
-    scipy
+    scipy \
+    requests
 
 # Build from repo root: docker build -f detection/streaming/Dockerfile .
 COPY models/lstm_earthquake_model.h5 /app/model.h5
