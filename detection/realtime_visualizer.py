@@ -197,7 +197,26 @@ class LSTMVisualizer:
                 },
                 timeout=3,
             )
-            print(f"  >> Posted to blackboard (P={prob:.1%}, PGA={pga:.3f}g)")
+            # Also dispatch drone
+            dispatch = json.dumps({
+                "command": "dispatch",
+                "target_lat": 34.765,
+                "target_lon": 32.420,
+                "pga": round(pga, 4),
+                "scan_radius_m": 500,
+                "timestamp": time.time(),
+            })
+            requests.post(
+                BLACKBOARD_URL,
+                json={
+                    "agent": AGENT_NAME,
+                    "type": "drone_dispatch",
+                    "content": dispatch,
+                    "confidence": 1.0,
+                },
+                timeout=3,
+            )
+            print(f"  >> Posted to blackboard (P={prob:.1%}, PGA={pga:.3f}g) + drone dispatched")
         except Exception:
             pass  # server unavailable — silently skip
 
