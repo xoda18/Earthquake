@@ -6,11 +6,11 @@ and when an event is detected, calls the Hugging Face LLM to generate a geologic
 hypothesis. Results are printed to terminal and optionally saved to CSV.
 
 Usage:
-    python demo/arduino-sensor/stream.py                          # stream only
-    python demo/arduino-sensor/stream.py --save data.csv          # stream + save
-    python demo/arduino-sensor/stream.py --detect                 # stream + detection
-    python demo/arduino-sensor/stream.py --detect --llm           # stream + detection + LLM
-    python demo/arduino-sensor/stream.py --detect --llm --save data.csv  # everything
+    python detection/streaming/stream.py                          # stream only
+    python detection/streaming/stream.py --save data.csv          # stream + save
+    python detection/streaming/stream.py --detect                 # stream + detection
+    python detection/streaming/stream.py --detect --llm           # stream + detection + LLM
+    python detection/streaming/stream.py --detect --llm --save data.csv  # everything
 """
 
 import argparse
@@ -23,7 +23,7 @@ import threading
 import serial
 import numpy as np
 
-# Add demo/ to path so detect_earthquake is importable
+# Add detection/ to path so detect_earthquake is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from detect_earthquake import load_config, preprocess, sta_lta, detect_spikes, find_event_window
 

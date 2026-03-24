@@ -7,10 +7,10 @@ Serial format expected from Arduino:  timestamp_ms,ax,ay,az,gx,gy,gz
 
 Usage:
     # Live sensor (Arduino connected via USB):
-    python Alex/realtime_predict.py --port /dev/ttyACM0
+    python detection/realtime_predict.py --port /dev/ttyACM0
 
-    # Offline test on saved CSV from demo:
-    python Alex/realtime_predict.py --csv demo/accelerometer_data.csv
+    # Offline test on saved CSV:
+    python detection/realtime_predict.py --csv detection/accelerometer_data.csv
 """
 
 import argparse
@@ -31,12 +31,12 @@ THRESHOLD    = 0.5   # probability threshold for earthquake alert
 
 
 def _model_dir():
-    """Return the directory where this script lives (Alex/)."""
-    return os.path.dirname(os.path.abspath(__file__))
+    """Return the models/ directory (sibling of detection/)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
 
 
 def load_model_and_scaler():
-    """Load trained LSTM model and StandardScaler from Alex/."""
+    """Load trained LSTM model and StandardScaler from models/."""
     from tensorflow import keras
 
     base = _model_dir()

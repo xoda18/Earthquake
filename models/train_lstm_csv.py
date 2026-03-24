@@ -6,7 +6,7 @@ Uses the generator (earthquake_simulator/generator.py) to produce
 waveforms in g-units (±2.0 g), matching MPU6500 sensor output directly.
 
 Usage:
-    python Alex/train_lstm_csv.py
+    python models/train_lstm_csv.py
 """
 
 import sys
