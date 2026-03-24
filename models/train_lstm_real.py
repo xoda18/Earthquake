@@ -52,6 +52,7 @@ MPU6500_NOISE_G  = 0.004  # g — target noise std after rescaling (MPU6500 floo
 P_BUFFER_SAMPLES = 500    # samples to drop before P-wave (2 s safety margin at 250 Hz)
 MIN_NOISE_SAMPLES = WINDOW_SIZE * 4   # minimum pre-P samples needed to be useful
 SUPPLEMENTAL_NOISE = 400  # synthetic noise recordings if real noise count is insufficient
+N_KNOCKS           = 600  # synthetic table knock recordings (negative examples)
 EPOCHS           = 30
 BATCH_SIZE       = 32
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,6 +167,27 @@ def generate_supplemental_noise(n_recordings, sample_rate=100):
     return np.vstack(X_list) if X_list else np.empty((0, 3, WINDOW_SIZE))
 
 
+def generate_knock_windows(n_recordings, sample_rate=100):
+    """Generate table knocks / impacts as negative examples."""
+    gen = IndependentEarthquakeGenerator(
+        sampling_rate=sample_rate,
+        duration_sec=60,
+    )
+    X_list = []
+    for i in range(n_recordings):
+        n_knocks = np.random.randint(1, 8)
+        amp = np.random.uniform(0.03, 1.0)
+        data = gen.generate_knock_data(
+            n_knocks=n_knocks,
+            knock_amplitude=amp,
+            noise_level=np.random.uniform(0.002, 0.006),
+        )
+        X_w, _ = make_windows(data.T, label=0)
+        if len(X_w):
+            X_list.append(X_w)
+    return np.vstack(X_list) if X_list else np.empty((0, 3, WINDOW_SIZE))
+
+
 def build_model():
     model = keras.Sequential([
         keras.layers.LSTM(64, activation="relu",
@@ -188,17 +210,23 @@ def main():
     # 1. Load real data
     X_eq, y_eq, X_noise, y_noise = load_real_data()
 
-    # 2. Supplement noise if needed
+    # 2. Add table knock negative examples
+    print(f"\nGenerating {N_KNOCKS} table knock recordings (negative examples)...")
+    X_knock = generate_knock_windows(N_KNOCKS)
+    y_knock = np.zeros(len(X_knock), dtype=int)
+    X_noise = np.vstack([X_noise, X_knock]) if len(X_noise) else X_knock
+    y_noise = np.hstack([y_noise, y_knock]) if len(y_noise) else y_knock
+    print(f"  Knock windows added: {len(X_knock)}")
+
+    # 3. Supplement with quiet noise if still unbalanced
     n_eq    = len(X_eq)
     n_noise = len(X_noise)
 
     if n_noise < n_eq:
         deficit = n_eq - n_noise
-        print(f"\nNoise deficit: {deficit} windows — generating synthetic noise...")
-        # Estimate how many recordings we need
+        print(f"\nNoise deficit: {deficit} windows — generating synthetic quiet noise...")
         n_recordings = max(SUPPLEMENTAL_NOISE, deficit // 100 + 50)
         X_syn = generate_supplemental_noise(n_recordings)
-        # Take only what we need
         np.random.shuffle(X_syn)
         X_syn = X_syn[:deficit]
         y_syn = np.zeros(len(X_syn), dtype=int)
@@ -206,7 +234,7 @@ def main():
         y_noise = np.hstack([y_noise, y_syn]) if len(y_noise) else y_syn
         print(f"  After supplement: {len(X_noise)} noise windows")
 
-    # 3. Combine and shuffle
+    # 4. Combine and shuffle
     X = np.vstack([X_eq, X_noise])
     y = np.hstack([y_eq, y_noise])
 
@@ -218,7 +246,7 @@ def main():
     print(f"  Noise      (0): {(y == 0).sum()}")
     print(f"  Total         : {len(X)}")
 
-    # 4. Normalize
+    # 5. Normalize
     print("\nFitting StandardScaler...")
     X_flat = X.reshape(-1, WINDOW_SIZE)   # (N*3, 100)
     scaler = StandardScaler()
@@ -228,13 +256,13 @@ def main():
     print(f"  Scaler mean range: {scaler.mean_.min():.6f} – {scaler.mean_.max():.6f}")
     print(f"  Scaler std  range: {scaler.scale_.min():.6f} – {scaler.scale_.max():.6f}")
 
-    # 5. Split
+    # 6. Split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.1, random_state=42, stratify=y
     )
     print(f"\nTrain: {len(X_train)}  |  Test: {len(X_test)}")
 
-    # 6. Train
+    # 7. Train
     print("\nTraining LSTM...")
     model = build_model()
     model.summary()
@@ -247,7 +275,7 @@ def main():
         verbose=1,
     )
 
-    # 7. Evaluate
+    # 8. Evaluate
     y_pred = (model.predict(X_test, verbose=0) > 0.5).astype(int).flatten()
     acc  = accuracy_score(y_test, y_pred)
     rec  = recall_score(y_test, y_pred)
@@ -262,7 +290,7 @@ def main():
     print(f"Precision: {prec*100:.2f}%")
     print(f"Confusion matrix:\n  TN={cm[0,0]}  FP={cm[0,1]}\n  FN={cm[1,0]}  TP={cm[1,1]}")
 
-    # 8. Save
+    # 9. Save
     model_path  = os.path.join(OUTPUT_DIR, "lstm_earthquake_model.h5")
     scaler_path = os.path.join(OUTPUT_DIR, "lstm_scaler.pkl")
 

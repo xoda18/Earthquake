@@ -1,607 +1,396 @@
 #!/usr/bin/env python3
 """
 realtime_visualizer.py
-Advanced real-time visualization of accelerometer data with earthquake detection highlighting.
+Real-time LSTM earthquake detection with visualization.
 
-Shows live 3D acceleration vector, waveforms, magnitude, and STA/LTA ratio.
-Earthquake periods are highlighted in red.
+3 threads: reader (serial) + inference (LSTM) + main (plots)
+Auto-reconnects Arduino if it hangs.
 
 Usage:
-    python realtime_visualizer.py --port /dev/ttyACM0 --duration 120 --mode optimized
-    python realtime_visualizer.py --duration 60  # auto-detect port
+    python detection/realtime_visualizer.py --port /dev/tty.usbmodem11301
 """
 
 import argparse
 import sys
+import os
 import time
 import threading
+import uuid
 from collections import deque
-from typing import Tuple, Optional
+from datetime import datetime, timezone
 import numpy as np
+import requests
 
-import os
-os.environ["MPLBACKEND"] = "TkAgg"  # must be set before any matplotlib import
+os.environ["MPLBACKEND"] = "TkAgg"
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.patches import Rectangle
-import matplotlib.patches as mpatches
 
-from hardware.mpu6050_interface import MPU6050Reader
-from hardware.sensor_buffer import StreamBuffer
-from detect_earthquake import (
-    load_config, preprocess, sta_lta, detect_spikes,
-    find_event_window, CONFIG_PROFILES
-)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from realtime_predict import load_model_and_scaler, predict_window, WINDOW_SIZE, STRIDE, THRESHOLD
 
-# Add "optimized" profile if it doesn't exist
-if "optimized" not in CONFIG_PROFILES:
-    CONFIG_PROFILES["optimized"] = {
-        "BP_LOW_HZ": 1.5,
-        "BP_HIGH_HZ": 22.0,
-        "STA_WINDOW_S": 0.3,
-        "LTA_WINDOW_S": 7.0,
-        "STA_LTA_THRESH": 5.0,
-        "AMP_SIGMA_THRESH": 5.0,
-        "MERGE_GAP_S": 2.0,
-        "QUIET_GUARD_S": 4.0,
-    }
+# ── Style ─────────────────────────────────────────────────────────────────────
+plt.style.use("dark_background")
+COLOR_X = "#ff6b6b"
+COLOR_Y = "#51cf66"
+COLOR_Z = "#339af0"
+COLOR_MAG = "#ffd43b"
+COLOR_PROB_OK = "#51cf66"
+COLOR_PROB_EQ = "#ff6b6b"
+COLOR_THRESH = "#ff922b"
+BG_QUIET = "#1a2f1a"
+BG_EARTHQUAKE = "#3f1a1a"
+
+BLACKBOARD_URL = "https://blackboard.jass.school/blackboard"
+AGENT_NAME = "earthquake"
 
 
-class RealtimeVisualizer:
-    """Real-time visualization of 3-axis accelerometer with earthquake detection."""
+class LSTMVisualizer:
 
-    def __init__(
-        self,
-        port: Optional[str] = None,
-        duration: int = 60,
-        mode: str = "optimized",
-        save_csv: Optional[str] = None,
-        print_data: bool = False,
-        from_csv: Optional[str] = None,
-        from_blackboard: Optional[str] = None,
-    ):
-        """
-        Initialize visualizer.
-
-        Args:
-            port: Serial port (auto-detect if None).
-            duration: Monitoring duration in seconds.
-            mode: Detection mode ("earthquake", "table_knock", or "optimized").
-            save_csv: Path to save CSV recording (None to skip).
-        """
-        self.reader = MPU6050Reader(port=port)
-        self.buffer = StreamBuffer(capacity=1000, sample_rate=100)
+    def __init__(self, port, duration=600):
+        self.port = port
         self.duration = duration
-        self.mode = mode
-        self.save_csv = save_csv
-        self.print_data = print_data
-        self.from_csv = from_csv
-        self.from_blackboard = from_blackboard
         self.running = False
-        self.last_print_time = 0
-        self.samples_collected = []
-        self.earthquake_regions = []  # List of (start, end) indices
+
+        print("Loading LSTM model...")
+        self.model, self.scaler = load_model_and_scaler()
+
+        self.lock = threading.Lock()
+
+        # Plot data
+        N = 800
+        self.times = deque(maxlen=N)
+        self.data_x = deque(maxlen=N)
+        self.data_y = deque(maxlen=N)
+        self.data_z = deque(maxlen=N)
+        self.data_mag = deque(maxlen=N)
+
+        # LSTM
+        self.lstm_buffer = deque(maxlen=WINDOW_SIZE)
+        self.samples_since_inference = 0
+        self.current_prob = 0.0
+        self.current_label = "noise"
+        self.prob_history = deque(maxlen=60)
+        self.prob_times = deque(maxlen=60)
         self.detection_count = 0
-        self.last_update_time = 0
+        self.peak_accel = 0.0
+        self.last_was_earthquake = False
+        self.total_samples = 0
+        self.session_start = time.time()
 
-        load_config(mode)
-        self.config = CONFIG_PROFILES[mode]
+        self.inference_ready = threading.Event()
+        self.inference_window = None
+        self.last_sample_time = time.time()
 
-        # Data storage for analysis
-        self.all_timestamps = deque(maxlen=1000)
-        self.all_x = deque(maxlen=1000)
-        self.all_y = deque(maxlen=1000)
-        self.all_z = deque(maxlen=1000)
-        self.all_mag = deque(maxlen=1000)
-        self.all_ratio = deque(maxlen=1000)
+    def _open_serial(self):
+        """Open serial port, return connection or None."""
+        import serial
+        try:
+            ser = serial.Serial(self.port, 115200, timeout=1)
+            time.sleep(2.0)  # wait for Arduino reset
+            ser.reset_input_buffer()
+            for _ in range(10):
+                ser.readline()
+            print(f"Connected to {self.port}")
+            self.last_sample_time = time.time()
+            return ser
+        except Exception as e:
+            print(f"Serial error: {e}")
+            return None
 
-        # Matplotlib figure setup
-        self.fig = None
-        self.axes = {}
-
-    def reader_thread_func(self):
-        """Background thread: read from hardware or tail CSV file."""
-        csv_out_file = None
-        csv_writer = None
-
-        if self.from_blackboard:
-            self._read_from_blackboard()
+    def reader_thread(self):
+        """Read serial with auto-reconnect on Arduino hang."""
+        ser = self._open_serial()
+        if not ser:
+            self.running = False
             return
-        if self.from_csv:
-            self._read_from_csv()
-            return
+
+        start = time.time()
 
         try:
-            self.reader.connect()
-            start_time = time.time()
-
-            if self.save_csv:
-                import csv
-                csv_out_file = open(self.save_csv, "w")
-                csv_writer = csv.writer(csv_out_file)
-                csv_writer.writerow(["timestamp_s", "ax", "ay", "az"])
-
-            if self.print_data:
-                print(f"{'Time':>8}  {'ax':>7}  {'ay':>7}  {'az':>7}  {'|a|':>7}")
-                print("-" * 46)
-
-            while self.running and (time.time() - start_time) < self.duration:
-                try:
-                    sample = self.reader.read_sample()
-                    self.buffer.append(sample)
-                    self.samples_collected.append(sample)
-
-                    if csv_writer:
-                        csv_writer.writerow(sample)
-
-                    if self.print_data:
-                        now = time.time()
-                        if now - self.last_print_time >= 0.2:
-                            self.last_print_time = now
-                            ts, ax, ay, az = sample
-                            mag = (ax**2 + ay**2 + az**2) ** 0.5
-                            print(f"{ts:8.2f}  {ax:7.4f}  {ay:7.4f}  {az:7.4f}  {mag:7.4f}")
-
-                except Exception as e:
-                    print(f"Reader warning: {e}", file=sys.stderr)
-
-        except Exception as e:
-            print(f"Reader error: {e}", file=sys.stderr)
-        finally:
-            self.reader.disconnect()
-            if csv_out_file:
-                csv_out_file.close()
-                print(f"Saved to {self.save_csv}")
-
-    def _read_from_csv(self):
-        """Tail a growing CSV file, appending samples to buffer."""
-        print(f"Reading from CSV: {self.from_csv}")
-        start_time = time.time()
-        file_pos = 0
-
-        while self.running and (time.time() - start_time) < self.duration:
-            try:
-                with open(self.from_csv, "r") as f:
-                    f.seek(file_pos)
-                    new_lines = f.readlines()
-                    file_pos = f.tell()
-
-                for line in new_lines:
-                    line = line.strip()
-                    if not line or line.startswith("timestamp") or line.startswith("#"):
-                        continue
-                    parts = line.split(",")
-                    if len(parts) < 4:
-                        continue
+            while self.running and (time.time() - start) < self.duration:
+                # Check for Arduino hang (no data for 3 seconds)
+                if time.time() - self.last_sample_time > 3.0:
+                    print("\nArduino hang detected — reconnecting...")
                     try:
-                        ts = float(parts[0])
-                        ax, ay, az = float(parts[1]), float(parts[2]), float(parts[3])
-                        self.buffer.append((ts, ax, ay, az))
-                        self.samples_collected.append((ts, ax, ay, az))
-                    except ValueError:
-                        continue
-
-                time.sleep(0.05)
-
-            except FileNotFoundError:
-                time.sleep(0.2)
-            except Exception as e:
-                time.sleep(0.1)
-
-    def _read_from_blackboard(self):
-        """Poll blackboard API for sensor data posted by Docker."""
-        import requests
-        import json
-
-        url = self.from_blackboard
-        print(f"Polling blackboard: {url}")
-        start_time = time.time()
-        sample_idx = 0
-        last_ts = 0
-
-        while self.running and (time.time() - start_time) < self.duration:
-            try:
-                resp = requests.get(url, timeout=2)
-                if resp.status_code != 200:
-                    time.sleep(0.3)
+                        ser.close()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    ser = self._open_serial()
+                    if not ser:
+                        time.sleep(2)
+                        ser = self._open_serial()
+                        if not ser:
+                            print("Reconnect failed.")
+                            break
                     continue
 
-                data = resp.json()
-                # Find earthquake_sensor entries
-                entries = data if isinstance(data, list) else data.get("entries", [data])
+                raw = ser.readline().decode("utf-8", errors="ignore").strip()
+                if not raw or raw.startswith("timestamp") or raw.startswith("#"):
+                    continue
 
-                for entry in entries:
-                    if entry.get("type") != "earthquake_sensor":
-                        continue
-                    try:
-                        content = json.loads(entry.get("content", "{}"))
-                    except (json.JSONDecodeError, TypeError):
-                        continue
+                parts = raw.split(",")
+                if len(parts) not in (4, 7):
+                    continue
 
-                    ts = content.get("timestamp", 0)
-                    if ts <= last_ts:
-                        continue  # already seen
-                    last_ts = ts
+                try:
+                    ts_s = float(parts[0]) / 1000.0
+                    ax, ay, az = float(parts[1]), float(parts[2]), float(parts[3])
+                except ValueError:
+                    continue
 
-                    ax = content.get("ax", 0)
-                    ay = content.get("ay", 0)
-                    az = content.get("az", 0)
+                self.last_sample_time = time.time()
+                self.total_samples += 1
+                mag = np.sqrt(ax**2 + ay**2 + az**2)
 
-                    sample = (float(sample_idx) / 100.0, ax, ay, az)
-                    self.buffer.append(sample)
-                    self.samples_collected.append(sample)
-                    sample_idx += 1
+                with self.lock:
+                    self.times.append(ts_s)
+                    self.data_x.append(ax)
+                    self.data_y.append(ay)
+                    self.data_z.append(az)
+                    self.data_mag.append(mag)
+                    if mag > self.peak_accel:
+                        self.peak_accel = mag
 
-                    if self.print_data:
-                        prob = content.get("probability", 0)
-                        label = content.get("label", "?")
-                        mag = content.get("magnitude_g", 0)
-                        print(f"  BB: ax={ax:.4f} ay={ay:.4f} az={az:.4f} |a|={mag:.4f} prob={prob:.1%} {label}")
+                    self.lstm_buffer.append((ax, ay, az))
+                    self.samples_since_inference += 1
 
-                time.sleep(0.3)  # poll 3 times/sec
+                    if (len(self.lstm_buffer) == WINDOW_SIZE
+                            and self.samples_since_inference >= STRIDE
+                            and not self.inference_ready.is_set()):
+                        self.samples_since_inference = 0
+                        self.inference_window = np.array(self.lstm_buffer)
+                        self.inference_ready.set()
 
-            except Exception as e:
-                time.sleep(0.5)
+        except Exception as e:
+            print(f"Reader error: {e}")
+        finally:
+            try:
+                ser.close()
+            except Exception:
+                pass
 
-    def analyze_buffer(self) -> Tuple[Optional[Tuple[int, int]], dict]:
-        """
-        Analyze current buffer and detect earthquakes.
-
-        Returns:
-            (event_window, metrics) where event_window = (start_idx, end_idx) or None.
-        """
-        if len(self.buffer) < 100:
-            return None, {}
-
-        # Extract data from buffer — get_numpy_data returns 4 separate arrays
-        timestamps, x, y, z = self.buffer.get_numpy_data()
-        if len(timestamps) < 100:
-            return None, {}
-
-        # Compute magnitude
-        mag = np.sqrt(x**2 + y**2 + z**2)
-
-        # Always return raw data even if detection fails
-        metrics = {
-            "timestamps": timestamps,
-            "x": x,
-            "y": y,
-            "z": z,
-            "mag": mag,
-            "filtered": np.zeros_like(mag),
-            "ratio": np.zeros_like(mag),
-            "spikes": [],
-        }
-
-        # Try detection pipeline — if it fails, plots still update with raw data
-        fs = self.buffer.sample_rate
+    def post_to_blackboard(self, prob, pga, ax, ay, az, mag):
+        """Post earthquake event to blackboard. Silently fails if server unavailable."""
+        import json
         try:
-            filtered = preprocess(mag, fs)
-            ratio = sta_lta(filtered, fs)
-            spikes = detect_spikes(ratio, filtered, fs)
-            event_window = find_event_window(spikes, ratio, fs)
-            metrics["filtered"] = filtered
-            metrics["ratio"] = ratio
-            metrics["spikes"] = spikes
-            return event_window, metrics
+            content = json.dumps({
+                "timestamp": time.time(),
+                "ax": round(ax, 3),
+                "ay": round(ay, 3),
+                "az": round(az, 3),
+                "magnitude_g": round(mag, 4),
+                "amplitude_g": round(pga, 4),
+                "probability": round(prob, 4),
+                "label": "earthquake",
+                "profile": "lstm",
+            })
+            requests.post(
+                BLACKBOARD_URL,
+                json={
+                    "agent": AGENT_NAME,
+                    "type": "earthquake_sensor",
+                    "content": content,
+                    "confidence": round(prob, 4),
+                },
+                timeout=3,
+            )
+            print(f"  >> Posted to blackboard (P={prob:.1%}, PGA={pga:.3f}g)")
         except Exception:
-            return None, metrics
+            pass  # server unavailable — silently skip
+
+    def inference_thread(self):
+        while self.running:
+            if not self.inference_ready.wait(timeout=1.0):
+                continue
+            self.inference_ready.clear()
+
+            with self.lock:
+                window = self.inference_window
+                ts = self.times[-1] if self.times else 0
+                pga = self.peak_accel
+                last_ax = self.data_x[-1] if self.data_x else 0
+                last_ay = self.data_y[-1] if self.data_y else 0
+                last_az = self.data_z[-1] if self.data_z else 0
+                last_mag = self.data_mag[-1] if self.data_mag else 0
+
+            if window is None:
+                continue
+
+            prob, label = predict_window(window, self.model, self.scaler)
+
+            with self.lock:
+                self.current_prob = prob
+                self.current_label = label
+                self.prob_history.append(prob)
+                self.prob_times.append(ts)
+                if label == "EARTHQUAKE" and not self.last_was_earthquake:
+                    self.detection_count += 1
+                    self.post_to_blackboard(prob, pga, last_ax, last_ay, last_az, last_mag)
+                self.last_was_earthquake = (label == "EARTHQUAKE")
 
     def setup_figure(self):
-        """Create matplotlib figure with 5 subplots."""
-        self.fig = plt.figure(figsize=(16, 10))
-        self.fig.suptitle(
-            f"Real-Time Seismic Monitoring ({self.mode} mode)",
-            fontsize=16, fontweight="bold"
-        )
+        self.fig = plt.figure(figsize=(16, 9))
+        self.fig.patch.set_facecolor("#0d1117")
 
-        # 1. 3D acceleration vector
-        self.axes["3d"] = self.fig.add_subplot(2, 3, 1, projection="3d")
-        self.axes["3d"].set_xlabel("X (g)")
-        self.axes["3d"].set_ylabel("Y (g)")
-        self.axes["3d"].set_zlabel("Z (g)")
-        self.axes["3d"].set_title("3D Acceleration Vector")
-        self.axes["3d"].set_xlim(-2, 2)
-        self.axes["3d"].set_ylim(-2, 2)
-        self.axes["3d"].set_zlim(-2, 2)
+        gs = self.fig.add_gridspec(3, 2, hspace=0.35, wspace=0.25,
+                                    left=0.06, right=0.98, top=0.92, bottom=0.06)
 
-        # 2. X, Y, Z waveforms
-        self.axes["xyz"] = self.fig.add_subplot(2, 3, 2)
-        self.axes["xyz"].set_xlabel("Time (s)")
-        self.axes["xyz"].set_ylabel("Acceleration (g)")
-        self.axes["xyz"].set_title("X, Y, Z Waveforms")
-        self.axes["xyz"].grid(True, alpha=0.3)
-        self.axes["xyz"].legend(["X", "Y", "Z"], loc="upper right")
+        # Top left: XYZ (tall)
+        self.ax_xyz = self.fig.add_subplot(gs[0:2, 0])
+        # Top right: Magnitude
+        self.ax_mag = self.fig.add_subplot(gs[0, 1])
+        # Middle right: LSTM probability
+        self.ax_prob = self.fig.add_subplot(gs[1, 1])
+        # Bottom: Status bar
+        self.ax_status = self.fig.add_subplot(gs[2, :])
 
-        # 3. Magnitude
-        self.axes["mag"] = self.fig.add_subplot(2, 3, 3)
-        self.axes["mag"].set_xlabel("Time (s)")
-        self.axes["mag"].set_ylabel("Magnitude (g)")
-        self.axes["mag"].set_title("Resultant Acceleration Magnitude")
-        self.axes["mag"].grid(True, alpha=0.3)
+        for ax in [self.ax_xyz, self.ax_mag, self.ax_prob]:
+            ax.set_facecolor("#161b22")
+            ax.tick_params(colors="#8b949e", labelsize=9)
+            ax.grid(True, alpha=0.15, color="#30363d")
+            for spine in ax.spines.values():
+                spine.set_color("#30363d")
 
-        # 4. STA/LTA ratio
-        self.axes["ratio"] = self.fig.add_subplot(2, 3, 4)
-        self.axes["ratio"].set_xlabel("Time (s)")
-        self.axes["ratio"].set_ylabel("STA/LTA Ratio")
-        self.axes["ratio"].set_title("STA/LTA Ratio (Detection Signal)")
-        self.axes["ratio"].grid(True, alpha=0.3)
+        self.ax_status.set_facecolor(BG_QUIET)
+        self.ax_status.axis("off")
 
-        # 5. Peak acceleration & detection status
-        self.axes["stats"] = self.fig.add_subplot(2, 3, 5)
-        self.axes["stats"].axis("off")
-        self.axes["stats"].set_title("Detection Status")
+        # Pre-create line objects for speed (no clear/replot)
+        self.line_x, = self.ax_xyz.plot([], [], COLOR_X, lw=0.9, label="X", alpha=0.9)
+        self.line_y, = self.ax_xyz.plot([], [], COLOR_Y, lw=0.9, label="Y", alpha=0.9)
+        self.line_z, = self.ax_xyz.plot([], [], COLOR_Z, lw=0.9, label="Z", alpha=0.9)
+        self.ax_xyz.set_title("Acceleration  X / Y / Z", color="#c9d1d9", fontsize=12, fontweight="bold")
+        self.ax_xyz.set_ylabel("g", color="#8b949e")
+        self.ax_xyz.legend(loc="upper right", fontsize=9, facecolor="#161b22", edgecolor="#30363d")
 
-        # 6. Spectrogram (simplified: magnitude histogram)
-        self.axes["hist"] = self.fig.add_subplot(2, 3, 6)
-        self.axes["hist"].set_xlabel("Acceleration (g)")
-        self.axes["hist"].set_ylabel("Frequency")
-        self.axes["hist"].set_title("Acceleration Distribution")
-        self.axes["hist"].grid(True, alpha=0.3)
+        self.line_mag, = self.ax_mag.plot([], [], COLOR_MAG, lw=1.2)
+        self.ax_mag.set_title("Magnitude |a|", color="#c9d1d9", fontsize=12, fontweight="bold")
+        self.ax_mag.set_ylabel("g", color="#8b949e")
 
-        plt.tight_layout()
+        self.ax_prob.set_title("LSTM Probability", color="#c9d1d9", fontsize=12, fontweight="bold")
+        self.ax_prob.set_ylabel("P(earthquake)", color="#8b949e")
+        self.ax_prob.set_ylim(-0.05, 1.05)
+        self.ax_prob.axhline(y=THRESHOLD, color=COLOR_THRESH, linestyle="--", lw=1.5, alpha=0.8)
+
+        self.fig.suptitle("LSTM Earthquake Detection", fontsize=16,
+                          fontweight="bold", color="#f0f6fc")
 
     def update_frame(self, frame):
-        """Update all plots with latest data."""
-        event_window, metrics = self.analyze_buffer()
+        with self.lock:
+            if len(self.times) < 10:
+                return
+            t = np.array(self.times)
+            x = np.array(self.data_x)
+            y = np.array(self.data_y)
+            z = np.array(self.data_z)
+            mag = np.array(self.data_mag)
+            prob = self.current_prob
+            label = self.current_label
+            peak = self.peak_accel
+            det = self.detection_count
+            n_samples = self.total_samples
+            elapsed_s = time.time() - self.session_start
+            ph = list(self.prob_history)
+            pt = list(self.prob_times)
 
-        if not metrics:
-            return
+        t0 = t[0]
+        tr = t - t0
 
-        x = metrics["x"]
-        y = metrics["y"]
-        z = metrics["z"]
-        mag = metrics["mag"]
-        ratio = metrics["ratio"]
-        timestamps = metrics["timestamps"]
-        spikes = metrics["spikes"]
+        # Update XYZ lines (fast — no clear)
+        self.line_x.set_data(tr, x)
+        self.line_y.set_data(tr, y)
+        self.line_z.set_data(tr, z)
+        self.ax_xyz.set_xlim(tr[0], tr[-1])
+        lo = min(x.min(), y.min(), z.min()) - 0.1
+        hi = max(x.max(), y.max(), z.max()) + 0.1
+        self.ax_xyz.set_ylim(lo, hi)
 
-        # Convert timestamps to relative seconds (already in seconds from read_sample)
-        if len(timestamps) > 0:
-            t_s = timestamps - timestamps[0]
+        # Update magnitude line
+        self.line_mag.set_data(tr, mag)
+        self.ax_mag.set_xlim(tr[0], tr[-1])
+        self.ax_mag.set_ylim(max(0, mag.min() - 0.1), mag.max() + 0.1)
+
+        # Update probability bars (must redraw — bar count changes)
+        self.ax_prob.clear()
+        self.ax_prob.set_facecolor("#161b22")
+        self.ax_prob.grid(True, alpha=0.15, color="#30363d")
+        self.ax_prob.tick_params(colors="#8b949e", labelsize=9)
+        for spine in self.ax_prob.spines.values():
+            spine.set_color("#30363d")
+
+        if ph:
+            pt_arr = np.array(pt) - t0
+            colors = [COLOR_PROB_EQ if p > THRESHOLD else COLOR_PROB_OK for p in ph]
+            self.ax_prob.bar(pt_arr, ph, width=0.35, color=colors, alpha=0.85,
+                             edgecolor="none")
+            self.ax_prob.set_xlim(tr[0], tr[-1])
+
+        self.ax_prob.axhline(y=THRESHOLD, color=COLOR_THRESH, linestyle="--", lw=1.5, alpha=0.8)
+        self.ax_prob.set_ylim(-0.05, 1.05)
+        self.ax_prob.set_title("LSTM Probability", color="#c9d1d9", fontsize=12, fontweight="bold")
+        self.ax_prob.set_ylabel("P(earthquake)", color="#8b949e")
+
+        # Status bar
+        self.ax_status.clear()
+        self.ax_status.axis("off")
+
+        if label == "EARTHQUAKE":
+            self.ax_status.set_facecolor(BG_EARTHQUAKE)
+            icon = "EARTHQUAKE"
+            clr = COLOR_PROB_EQ
         else:
-            return
+            self.ax_status.set_facecolor(BG_QUIET)
+            icon = "QUIET"
+            clr = COLOR_PROB_OK
 
-        # ===== Plot 1: 3D Vector =====
-        self.axes["3d"].clear()
-        if len(x) > 0:
-            # Plot trajectory
-            self.axes["3d"].plot(x, y, z, "b-", alpha=0.3, linewidth=0.5)
-            # Plot current point
-            self.axes["3d"].scatter([x[-1]], [y[-1]], [z[-1]], color="red", s=100, label="Current")
-        self.axes["3d"].set_xlabel("X (g)")
-        self.axes["3d"].set_ylabel("Y (g)")
-        self.axes["3d"].set_zlabel("Z (g)")
-        self.axes["3d"].set_xlim(-2, 2)
-        self.axes["3d"].set_ylim(-2, 2)
-        self.axes["3d"].set_zlim(-2, 2)
-        self.axes["3d"].set_title("3D Acceleration Vector")
-        self.axes["3d"].legend()
+        pga_str = f"{peak:.3f}" if peak < 10 else f"{peak:.1f}"
 
-        # ===== Plot 2: X, Y, Z Waveforms =====
-        self.axes["xyz"].clear()
-        self.axes["xyz"].plot(t_s, x, "r-", label="X", linewidth=1, alpha=0.8)
-        self.axes["xyz"].plot(t_s, y, "g-", label="Y", linewidth=1, alpha=0.8)
-        self.axes["xyz"].plot(t_s, z, "b-", label="Z", linewidth=1, alpha=0.8)
-
-        # Highlight earthquake regions
-        if event_window:
-            start_idx, end_idx = event_window
-            if start_idx < len(t_s) and end_idx < len(t_s):
-                t_start = t_s[start_idx]
-                t_end = t_s[end_idx]
-                self.axes["xyz"].axvspan(t_start, t_end, alpha=0.2, color="red", label="Earthquake")
-
-        self.axes["xyz"].set_xlabel("Time (s)")
-        self.axes["xyz"].set_ylabel("Acceleration (g)")
-        self.axes["xyz"].set_title("X, Y, Z Waveforms")
-        self.axes["xyz"].grid(True, alpha=0.3)
-        self.axes["xyz"].legend(loc="upper right")
-
-        # ===== Plot 3: Magnitude =====
-        self.axes["mag"].clear()
-        self.axes["mag"].plot(t_s, mag, "k-", linewidth=1.5, label="Magnitude")
-        self.axes["mag"].axhline(
-            y=np.mean(mag[: len(mag) // 4]) if len(mag) > 4 else 1,
-            color="gray",
-            linestyle="--",
-            alpha=0.5,
-            label="Baseline"
+        self.ax_status.text(
+            0.5, 0.5,
+            f"  {icon}   |   P = {prob:.1%}   |   PGA = {pga_str} g   |   "
+            f"Detections: {det}   |   Samples: {n_samples}   |   {elapsed_s:.0f}s  ",
+            transform=self.ax_status.transAxes, fontsize=15,
+            va="center", ha="center", fontfamily="monospace",
+            fontweight="bold", color=clr,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#0d1117", edgecolor=clr, lw=2),
         )
-
-        # Highlight earthquake
-        if event_window:
-            start_idx, end_idx = event_window
-            if start_idx < len(t_s) and end_idx < len(t_s):
-                t_start = t_s[start_idx]
-                t_end = t_s[end_idx]
-                self.axes["mag"].axvspan(t_start, t_end, alpha=0.2, color="red")
-                peak_mag = np.max(mag[start_idx:end_idx])
-                self.axes["mag"].scatter(
-                    [(t_start + t_end) / 2], [peak_mag], color="red", s=100, zorder=5
-                )
-
-        self.axes["mag"].set_xlabel("Time (s)")
-        self.axes["mag"].set_ylabel("Magnitude (g)")
-        self.axes["mag"].set_title("Resultant Acceleration Magnitude")
-        self.axes["mag"].grid(True, alpha=0.3)
-        self.axes["mag"].legend()
-
-        # ===== Plot 4: STA/LTA Ratio =====
-        self.axes["ratio"].clear()
-        self.axes["ratio"].plot(t_s, ratio, "purple", linewidth=1.5, label="STA/LTA")
-        threshold = self.config["STA_LTA_THRESH"]
-        self.axes["ratio"].axhline(
-            y=threshold, color="red", linestyle="--", linewidth=2, label=f"Threshold ({threshold})"
-        )
-        self.axes["ratio"].fill_between(t_s, 0, ratio, alpha=0.2, color="purple")
-
-        # Highlight spikes (spikes is list of (start, end) tuples)
-        if len(spikes) > 0:
-            for s_start, s_end in spikes:
-                if s_start < len(t_s):
-                    self.axes["ratio"].axvline(t_s[s_start], color="red", alpha=0.5, linewidth=1)
-
-        # Highlight earthquake window
-        if event_window:
-            start_idx, end_idx = event_window
-            if start_idx < len(t_s) and end_idx < len(t_s):
-                t_start = t_s[start_idx]
-                t_end = t_s[end_idx]
-                self.axes["ratio"].axvspan(t_start, t_end, alpha=0.2, color="red")
-
-        self.axes["ratio"].set_xlabel("Time (s)")
-        self.axes["ratio"].set_ylabel("STA/LTA Ratio")
-        self.axes["ratio"].set_title("STA/LTA Ratio (Detection Signal)")
-        self.axes["ratio"].grid(True, alpha=0.3)
-        self.axes["ratio"].legend(loc="upper right")
-
-        # ===== Plot 5: Status Text =====
-        self.axes["stats"].clear()
-        self.axes["stats"].axis("off")
-
-        peak_mag = np.max(mag) if len(mag) > 0 else 0
-        current_mag = mag[-1] if len(mag) > 0 else 0
-        current_ratio = ratio[-1] if len(ratio) > 0 else 0
-
-        status_text = f"""
-DETECTION STATUS
-{'=' * 40}
-
-Mode: {self.mode.upper()}
-Duration: {t_s[-1]:.1f}s / {self.duration}s
-
-Current Acceleration:
-  X: {x[-1]:+.3f} g
-  Y: {y[-1]:+.3f} g
-  Z: {z[-1]:+.3f} g
-
-Magnitude:
-  Current: {current_mag:.3f} g
-  Peak: {peak_mag:.3f} g
-  Baseline: {np.mean(mag[:min(100, len(mag))]):.3f} g
-
-STA/LTA:
-  Current: {current_ratio:.3f}
-  Threshold: {threshold:.3f}
-  Status: {'🔴 EARTHQUAKE' if current_ratio > threshold else '🟢 QUIET'}
-
-Detections: {self.detection_count}
-"""
-
-        if event_window:
-            status_text += f"\n✓ EARTHQUAKE DETECTED\n  Window: {event_window[0]}-{event_window[1]}"
-            self.detection_count += 1
-
-        self.axes["stats"].text(
-            0.05, 0.95, status_text, transform=self.axes["stats"].transAxes,
-            fontsize=10, verticalalignment="top", fontfamily="monospace",
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5)
-        )
-
-        # ===== Plot 6: Magnitude Distribution =====
-        self.axes["hist"].clear()
-        self.axes["hist"].hist(mag, bins=30, color="steelblue", alpha=0.7, edgecolor="black")
-        self.axes["hist"].axvline(
-            x=np.mean(mag), color="green", linestyle="--", linewidth=2, label="Mean"
-        )
-        self.axes["hist"].set_xlabel("Acceleration (g)")
-        self.axes["hist"].set_ylabel("Frequency")
-        self.axes["hist"].set_title("Acceleration Distribution")
-        self.axes["hist"].grid(True, alpha=0.3)
-        self.axes["hist"].legend()
 
     def run(self):
-        """Start real-time monitoring and visualization."""
-        print(f"Starting real-time visualizer (mode={self.mode})...")
-        print(f"Duration: {self.duration}s")
-        print(f"Port: {self.reader.port}")
-        if self.save_csv:
-            print(f"Recording to: {self.save_csv}")
-
+        print(f"Starting on {self.port} | duration {self.duration}s | Ctrl+C to stop")
         self.running = True
 
-        # Start reader thread
-        reader_thread = threading.Thread(target=self.reader_thread_func, daemon=True)
-        reader_thread.start()
+        t1 = threading.Thread(target=self.reader_thread, daemon=True)
+        t2 = threading.Thread(target=self.inference_thread, daemon=True)
+        t1.start()
+        t2.start()
 
-        # Setup matplotlib
         self.setup_figure()
 
-        # Create animation
         ani = FuncAnimation(
-            self.fig,
-            self.update_frame,
-            interval=200,  # Update every 200ms
-            blit=False,
-            cache_frame_data=False,
+            self.fig, self.update_frame,
+            interval=250, blit=False, cache_frame_data=False,
         )
 
         try:
             plt.show()
         except KeyboardInterrupt:
-            print("\n✓ Stopped by user")
+            print("\nStopped.")
         finally:
             self.running = False
-            reader_thread.join(timeout=5)
+            t1.join(timeout=3)
+            t2.join(timeout=3)
 
-        print(f"\n=== Analysis Summary ===")
-        print(f"Total samples collected: {len(self.samples_collected)}")
-        print(f"Earthquakes detected: {self.detection_count}")
-        if self.samples_collected:
-            mags = [np.sqrt(s[1]**2 + s[2]**2 + s[3]**2) for s in self.samples_collected]
-            print(f"Peak acceleration: {max(mags):.3f}g")
-            print(f"Average acceleration: {np.mean(mags):.3f}g")
+        print(f"Total detections: {self.detection_count}")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Real-time earthquake detection visualization"
-    )
-    parser.add_argument(
-        "--port", type=str, default=None, help="Serial port (auto-detect if not specified)"
-    )
-    parser.add_argument(
-        "--duration", type=int, default=60, help="Monitoring duration in seconds"
-    )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["earthquake", "table_knock", "optimized"],
-        default="optimized",
-        help="Detection mode",
-    )
-    parser.add_argument(
-        "--save-csv", type=str, default=None, help="Save recording to CSV file"
-    )
-    parser.add_argument(
-        "--print", dest="print_data", action="store_true",
-        help="Also print data to terminal (5 Hz)"
-    )
-    parser.add_argument(
-        "--from-csv", type=str, default=None,
-        help="Read from a growing CSV file instead of serial port"
-    )
-    parser.add_argument(
-        "--from-blackboard", type=str, default=None,
-        help="Read from blackboard API (e.g. https://blackboard.jass.school/blackboard)"
-    )
-
+    parser = argparse.ArgumentParser(description="Real-time LSTM earthquake visualizer")
+    parser.add_argument("--port", type=str, required=True)
+    parser.add_argument("--duration", type=int, default=600)
     args = parser.parse_args()
-
-    visualizer = RealtimeVisualizer(
-        port=args.port,
-        duration=args.duration,
-        mode=args.mode,
-        save_csv=args.save_csv,
-        print_data=args.print_data,
-        from_csv=args.from_csv,
-        from_blackboard=args.from_blackboard,
-    )
-    visualizer.run()
+    LSTMVisualizer(port=args.port, duration=args.duration).run()
 
 
 if __name__ == "__main__":

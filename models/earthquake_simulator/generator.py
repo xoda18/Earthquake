@@ -80,6 +80,49 @@ class IndependentEarthquakeGenerator:
 
         return np.column_stack([accel_x, accel_y, accel_z])
 
+    def generate_knock_data(self, n_knocks=None, knock_amplitude=None, noise_level=0.005):
+        """
+        Generate table knock / impact data (NOT earthquake).
+        Short sharp impulses that decay in <0.5 sec — high frequency, no sustained shaking.
+        """
+        if n_knocks is None:
+            n_knocks = np.random.randint(1, 6)
+        if knock_amplitude is None:
+            knock_amplitude = np.random.uniform(0.05, 0.8)  # g
+
+        accel_x = np.random.normal(0, noise_level, self.num_samples)
+        accel_y = np.random.normal(0, noise_level, self.num_samples)
+        accel_z = np.random.normal(0, noise_level, self.num_samples)
+
+        for _ in range(n_knocks):
+            # Random time for each knock
+            knock_sec = np.random.uniform(2, self.duration_sec - 2)
+            knock_idx = int(knock_sec * self.sampling_rate)
+
+            # Knock: sharp spike + fast exponential decay (0.05–0.3 sec)
+            decay_time = np.random.uniform(0.05, 0.3)
+            decay_samples = int(decay_time * self.sampling_rate)
+            freq = np.random.uniform(15, 40)  # Hz — table resonance
+
+            amp = knock_amplitude * np.random.uniform(0.5, 1.0)
+
+            for j in range(min(decay_samples, self.num_samples - knock_idx)):
+                t_local = j / self.sampling_rate
+                envelope = np.exp(-t_local / (decay_time * 0.3))
+                wave = np.sin(2 * np.pi * freq * t_local)
+
+                idx = knock_idx + j
+                # Knocks mainly hit Z axis (vertical)
+                accel_z[idx] += amp * envelope * wave
+                accel_x[idx] += amp * 0.3 * envelope * wave * np.random.uniform(0.5, 1.5)
+                accel_y[idx] += amp * 0.3 * envelope * wave * np.random.uniform(0.5, 1.5)
+
+        accel_x = np.clip(accel_x, -2.0, 2.0)
+        accel_y = np.clip(accel_y, -2.0, 2.0)
+        accel_z = np.clip(accel_z, -2.0, 2.0)
+
+        return np.column_stack([accel_x, accel_y, accel_z])
+
     def generate_noise_data(self, noise_level=0.005):
         """Generate background noise only (no earthquake)"""
         accel_x = np.random.normal(0, noise_level, self.num_samples)
