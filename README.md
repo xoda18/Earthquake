@@ -2,45 +2,6 @@
 
 Real-time earthquake detection using MPU6500 accelerometer + Arduino + LSTM neural network in Docker.
 
-# For me
-
-```bash
-docker run --rm --device /dev/ttyACM0 earthquake-detector --profile table
-
-#visualizing 
-
-● Одна программа, всё параллельно внутри:
-
-  cd ~/Desktop/NUP/JASS/Earthquake && source ../venv/bin/activate
-
-  # Всё вместе: данные + детекция + blackboard + графики
-  python3 detection/streaming/stream.py --detect --blackboard --viz
-
-  # Без графиков
-  python3 detection/streaming/stream.py --detect --blackboard
-
-  # Только данные
-  python3 detection/streaming/stream.py
-
-  # Данные + графики (без blackboard)
-  python3 detection/streaming/stream.py --viz
-
-  # С сохранением в CSV
-  python3 detection/streaming/stream.py --detect --blackboard --viz --save
-   data.csv
-
-  Флаги:
-  - --detect — STA/LTA детекция
-  - --blackboard — отправка на blackboard
-  - --viz — живые графики (убрать флаг = без графиков)
-  - --save FILE — сохранить CSV
-  - --mode — earthquake / table_knock / optimized
-
-✻ Churned for 1m 20s
-
-
-```
-
 ## Setup
 
 ```bash
@@ -49,28 +10,65 @@ cd Earthquake
 ./setup.sh
 ```
 
-This installs arduino-cli, uploads firmware, and builds the Docker image. Needs: Docker, Arduino Uno + MPU6500 sensor connected via USB.
+## USING:
+
+```bash
+
+ cd ~/Desktop/NUP/JASS/Earthquake && source ../venv/bin/activate &&
+  python3 detection/streaming/stream.py --detect --blackboard --viz
+  --threshold 0.7 --cooldown 5
+
+```
+
+Needs: Docker, Arduino Uno + MPU6500 sensor connected via USB.
 
 ## Run
 
+### Option 1: Docker (LSTM classification + blackboard)
+
 ```bash
-# Table demo (recommended)
 docker run --rm --device /dev/ttyACM0 earthquake-detector --profile table
-
-# Default
-docker run --rm --device /dev/ttyACM0 earthquake-detector
-
-# Silent — only prints when earthquake detected
-docker run --rm --device /dev/ttyACM0 earthquake-detector --profile table --mode magnitude
 ```
 
+### Option 2: All-in-one Python (streaming + detection + blackboard + visualization)
 
-## Profiles
+```bash
+cd ~/Desktop/NUP/JASS/Earthquake && source ../venv/bin/activate
+
+# Everything: data + detection + blackboard + live graphs
+python3 detection/streaming/stream.py --detect --blackboard --viz
+
+# Without graphs
+python3 detection/streaming/stream.py --detect --blackboard
+
+# Stream only
+python3 detection/streaming/stream.py
+
+# Stream + graphs (no blackboard)
+python3 detection/streaming/stream.py --viz
+
+# Save to CSV
+python3 detection/streaming/stream.py --detect --blackboard --viz --save data.csv
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--detect` | Enable STA/LTA earthquake detection |
+| `--blackboard` | Post data to ORB blackboard |
+| `--viz` | Show live graphs (3D vector + waveforms + STA/LTA) |
+| `--save FILE` | Save data to CSV |
+| `--mode` | Detection mode: `earthquake`, `table_knock`, `optimized` |
+| `--rate N` | Print rate per second (default 5) |
+| `--port` | Serial port (auto-detected) |
+
+## Docker Profiles
 
 | Profile | Use case | Gain | Threshold |
 |---------|----------|------|-----------|
 | `default` | Balanced | 1x | 0.7 |
-| `table` | Demo on table — knocks detected | 3x | 0.8 |
+| `table` | Table demo — knocks detected | 3x | 0.8 |
 | `sensitive` | Light taps and vibrations | 5x | 0.6 |
 | `earthquake` | Real seismic only | 1x | 0.9 |
 
@@ -86,14 +84,14 @@ MPU6500 SCL → Arduino A5
 ## How It Works
 
 ```
-MPU6500 → Arduino (100Hz serial) → Docker (TensorFlow LSTM) → earthquake/quiet
+MPU6500 → Arduino (100Hz serial) → Python/Docker → detection + blackboard + visualization
 ```
 
-1. Sensor reads acceleration at 100 Hz
-2. Docker container calibrates gravity, removes it from signal
-3. Gain amplifies the signal (profile-dependent)
-4. LSTM classifies 1-second windows → probability 0–100%
-5. If prob > threshold → EARTHQUAKE
+1. Sensor reads acceleration (ax, ay, az) at 100 Hz
+2. Gravity is calibrated and removed from signal
+3. STA/LTA detection finds energy spikes (or LSTM classifies in Docker)
+4. Results posted to ORB blackboard for other agents
+5. Live 3D + waveform visualization (optional)
 
 ## Docs
 
@@ -101,7 +99,7 @@ MPU6500 → Arduino (100Hz serial) → Docker (TensorFlow LSTM) → earthquake/q
 - [Troubleshooting](detection/streaming/TROUBLESHOOTING.md)
 - [System prompt for ORB](earthquake_agent_system_prompt.md)
 
-## If Arduino disconnects
+## If Arduino Disconnects
 
 ```bash
 ./detection/streaming/setup.sh
