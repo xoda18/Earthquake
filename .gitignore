@@ -209,5 +209,5 @@ __marimo__/
 
 # Datasets (large files, not for version control)
 Dataset_Central/
-models/dataset/
+models/datasets_for_trainings/
 *.hdf5
