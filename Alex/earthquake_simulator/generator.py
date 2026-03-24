@@ -15,15 +15,15 @@ class IndependentEarthquakeGenerator:
         self.num_samples = sampling_rate * duration_sec
 
     def generate_earthquake_data(self, magnitude=4.5, p_wave_start_sec=10,
-                                 earthquake_duration_sec=15, noise_level=50):
+                                 earthquake_duration_sec=15, noise_level=0.005):
         """
-        Генерирует землетрясение в сырых отсчётах (±596)
+        Генерирует землетрясение в единицах g (±2.0 g) — соответствует MPU6500.
 
         Args:
             magnitude: Магнитуда землетрясения (2-7)
             p_wave_start_sec: Когда начинается P-волна (сек)
             earthquake_duration_sec: Длительность S-волны (сек)
-            noise_level: Уровень шума в спокойные периоды
+            noise_level: Уровень фонового шума (g); MPU6500 в покое ≈ 0.003–0.005 g
         """
         time = np.arange(self.num_samples) / self.sampling_rate
         accel_x = np.random.normal(0, noise_level, self.num_samples)
@@ -33,7 +33,7 @@ class IndependentEarthquakeGenerator:
         # P-волна (быстрая, слабая)
         p_start_idx = int(p_wave_start_sec * self.sampling_rate)
         p_duration_idx = int(3 * self.sampling_rate)  # 3 секунды
-        p_amplitude = magnitude * 80  # Амплитуда зависит от магнитуды
+        p_amplitude = magnitude * 0.008  # Амплитуда в g
 
         for i in range(p_start_idx, min(p_start_idx + p_duration_idx, self.num_samples)):
             t_local = (i - p_start_idx) / self.sampling_rate
@@ -46,7 +46,7 @@ class IndependentEarthquakeGenerator:
         # S-волна (мощная, низкочастотная)
         s_start_idx = int((p_wave_start_sec + 3) * self.sampling_rate)
         s_duration_idx = int(earthquake_duration_sec * self.sampling_rate)
-        s_amplitude = magnitude * 150
+        s_amplitude = magnitude * 0.015  # в g
 
         for i in range(s_start_idx, min(s_start_idx + s_duration_idx, self.num_samples)):
             t_local = (i - s_start_idx) / self.sampling_rate
@@ -63,7 +63,7 @@ class IndependentEarthquakeGenerator:
         # Поверхностные волны (долгоживущие)
         surf_start_idx = int((p_wave_start_sec + 8) * self.sampling_rate)
         surf_duration_idx = int((earthquake_duration_sec + 15) * self.sampling_rate)
-        surf_amplitude = magnitude * 100
+        surf_amplitude = magnitude * 0.010  # в g
 
         for i in range(surf_start_idx, min(surf_start_idx + surf_duration_idx, self.num_samples)):
             t_local = (i - surf_start_idx) / self.sampling_rate
@@ -73,14 +73,14 @@ class IndependentEarthquakeGenerator:
             accel_x[i] += surf_amplitude * envelope * np.sin(phase)
             accel_y[i] += surf_amplitude * envelope * np.cos(phase)
 
-        # Обрезать до ±596
-        accel_x = np.clip(accel_x, -596, 596)
-        accel_y = np.clip(accel_y, -596, 596)
-        accel_z = np.clip(accel_z, -596, 596)
+        # Обрезать до ±2.0 g (физический предел MPU6500 в режиме ±2g)
+        accel_x = np.clip(accel_x, -2.0, 2.0)
+        accel_y = np.clip(accel_y, -2.0, 2.0)
+        accel_z = np.clip(accel_z, -2.0, 2.0)
 
         return np.column_stack([accel_x, accel_y, accel_z])
 
-    def generate_noise_data(self, noise_level=50):
+    def generate_noise_data(self, noise_level=0.005):
         """Генерирует только фоновый шум (без землетрясения)"""
         accel_x = np.random.normal(0, noise_level, self.num_samples)
         accel_y = np.random.normal(0, noise_level, self.num_samples)
