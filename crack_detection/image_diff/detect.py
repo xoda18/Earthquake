@@ -24,9 +24,10 @@ from pupil_apriltags import Detector
 
 # ── Configurable defaults ────────────────────────────────────────────────
 SENSITIVITY = 0.30
-BLUR_KSIZE = 5
+BLUR_KSIZE = 9
 TILE_SIZE = 32
 MIN_AREA = 5000       # minimum changed region area in px² (filters noise/small shifts)
+EDGE_SUPPRESS_RADIUS = 7  # px radius to suppress diff near edges (0 = disabled)
 TAG_FAMILY = "tag25h9"
 TAG_IDS = [0, 1]
 INPUT_EXTENSIONS = [".tif", ".tiff", ".jpg", ".jpeg", ".JPG", ".JPEG"]
@@ -82,8 +83,20 @@ def parse_args():
         help="Expected AprilTag IDs in scene",
     )
     p.add_argument(
-        "--method", choices=["gradient", "local_norm", "raw", "all"], default="gradient",
+        "--method", choices=["gradient", "local_norm", "raw", "ssim", "all"], default="gradient",
         help="Diff method for the primary output heatmap",
+    )
+    p.add_argument(
+        "--no-ecc", action="store_true",
+        help="Skip ECC sub-pixel alignment refinement after homography",
+    )
+    p.add_argument(
+        "--ecc-iterations", type=int, default=200,
+        help="Max iterations for ECC refinement",
+    )
+    p.add_argument(
+        "--ecc-epsilon", type=float, default=1e-6,
+        help="ECC convergence threshold",
     )
     p.add_argument(
         "--alpha", type=float, default=0.4,
@@ -108,6 +121,11 @@ def parse_args():
     p.add_argument(
         "--ransac-thresh", type=float, default=5.0,
         help="RANSAC reprojection threshold in pixels",
+    )
+    p.add_argument(
+        "--edge-suppress", type=int, default=EDGE_SUPPRESS_RADIUS,
+        help="Suppress diff within N px of edges in the before image (0 = off). "
+             "Reduces false detections from alignment shifts along wires, edges, etc.",
     )
     return p.parse_args()
 
@@ -208,6 +226,36 @@ def compute_homography(tags_before, tags_after, tag_ids, method="ransac", thresh
     return H, error
 
 
+def refine_ecc(before_img, after_img, H, max_iter=200, epsilon=1e-6):
+    """Refine homography with ECC for sub-pixel alignment accuracy."""
+    gray_b = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY)
+    gray_a = cv2.cvtColor(after_img, cv2.COLOR_BGR2GRAY)
+
+    # Downscale for speed — ECC on full-res is slow
+    scale = 0.5
+    small_b = cv2.resize(gray_b, None, fx=scale, fy=scale)
+    small_a = cv2.resize(gray_a, None, fx=scale, fy=scale)
+
+    # Scale the homography for the smaller images
+    S = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]], dtype=np.float64)
+    S_inv = np.array([[1/scale, 0, 0], [0, 1/scale, 0], [0, 0, 1]], dtype=np.float64)
+    H_small = S @ H @ S_inv
+
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, max_iter, epsilon)
+    try:
+        _, H_refined_small = cv2.findTransformECC(
+            small_b, small_a, H_small.astype(np.float32),
+            cv2.MOTION_HOMOGRAPHY, criteria,
+        )
+        # Scale back to full resolution
+        H_refined = S_inv @ H_refined_small.astype(np.float64) @ S
+        print(f"  ECC refinement converged")
+        return H_refined
+    except cv2.error as e:
+        print(f"  [WARNING] ECC refinement failed ({e}), using original homography")
+        return H
+
+
 def warp_and_crop(before_img, after_img, H):
     """Warp after image into before's coordinate space and crop to valid overlap."""
     h, w = before_img.shape[:2]
@@ -287,10 +335,57 @@ def diff_raw(gray_before, gray_after, blur_ksize):
     return diff
 
 
+def diff_ssim(gray_before, gray_after, blur_ksize, win_size=11):
+    """Method D: SSIM-based difference — compares local patches, robust to small misalignment."""
+    C1 = (0.01 * 255) ** 2
+    C2 = (0.03 * 255) ** 2
+    k = win_size
+
+    mu_b = cv2.GaussianBlur(gray_before, (k, k), 1.5)
+    mu_a = cv2.GaussianBlur(gray_after, (k, k), 1.5)
+
+    mu_b_sq = mu_b ** 2
+    mu_a_sq = mu_a ** 2
+    mu_ba = mu_b * mu_a
+
+    sigma_b_sq = cv2.GaussianBlur(gray_before ** 2, (k, k), 1.5) - mu_b_sq
+    sigma_a_sq = cv2.GaussianBlur(gray_after ** 2, (k, k), 1.5) - mu_a_sq
+    sigma_ba = cv2.GaussianBlur(gray_before * gray_after, (k, k), 1.5) - mu_ba
+
+    ssim_map = ((2 * mu_ba + C1) * (2 * sigma_ba + C2)) / \
+               ((mu_b_sq + mu_a_sq + C1) * (sigma_b_sq + sigma_a_sq + C2))
+
+    # Convert similarity (1=identical) to difference (0=identical, 1=max change)
+    diff = np.clip(1.0 - ssim_map, 0, 1).astype(np.float32)
+    diff = cv2.GaussianBlur(diff, (blur_ksize, blur_ksize), 0)
+    return diff
+
+
+def build_edge_suppression_mask(gray_before, radius):
+    """Build a mask that suppresses diff values near strong edges in the before image.
+
+    Edges shift the most under imperfect alignment (parallax, sub-pixel error).
+    By zeroing out diff near existing edges, we keep only changes in flat/smooth
+    regions — which are real structural changes, not alignment artifacts.
+    """
+    if radius <= 0:
+        return None
+
+    edges = cv2.Canny(gray_before.astype(np.uint8), 50, 150)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+    dilated = cv2.dilate(edges, kernel)
+
+    # 1.0 = keep, 0.0 = suppress (near edge)
+    suppress = 1.0 - (dilated / 255.0).astype(np.float32)
+    return suppress
+
+
 def compute_diffs(crop_before, crop_after, args):
     """Compute all requested diff maps. Returns dict of name→diff_map."""
     gb = cv2.cvtColor(crop_before, cv2.COLOR_BGR2GRAY).astype(np.float32)
     ga = cv2.cvtColor(crop_after, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    edge_mask = build_edge_suppression_mask(gb, args.edge_suppress)
 
     results = {}
     if args.method in ("gradient", "all"):
@@ -299,6 +394,16 @@ def compute_diffs(crop_before, crop_after, args):
         results["local_norm"] = diff_local_norm(gb, ga, args.tile_size, args.blur)
     if args.method in ("raw", "all"):
         results["raw"] = diff_raw(gb, ga, args.blur)
+    if args.method in ("ssim", "all"):
+        results["ssim"] = diff_ssim(gb, ga, args.blur)
+
+    # Apply edge suppression to all diff maps
+    if edge_mask is not None:
+        suppressed = sum((v * edge_mask < v).sum() for v in results.values())
+        print(f"  Edge suppression: radius={args.edge_suppress}px, suppressed {suppressed} diff values near edges")
+        for name in results:
+            results[name] = results[name] * edge_mask
+
     return results
 
 
@@ -308,9 +413,13 @@ def build_heatmap_overlay(crop_after, diff_map, sensitivity, alpha, min_area):
     output = crop_after.copy().astype(np.float64)
     raw_mask = (diff_map > sensitivity).astype(np.uint8)
 
-    # Light morphological closing to merge nearby pixels into blobs
+    # Opening: erode then dilate — removes thin line artifacts (wires, edges)
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    opened = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, kernel_open)
+
+    # Closing: merge nearby pixels into blobs
     kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
-    closed = cv2.morphologyEx(raw_mask, cv2.MORPH_CLOSE, kernel_close)
+    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel_close)
 
     # Filter out small regions (noise, minor shifts) — keep only large blobs
     filtered = np.zeros_like(closed)
@@ -442,65 +551,65 @@ def process_pair(date_suffix, before_path, after_path, args):
         method=args.homography_method, thresh=args.ransac_thresh,
     )
 
+    # 3b. ECC sub-pixel refinement
+    if not args.no_ecc:
+        H = refine_ecc(before_img, after_img, H,
+                        max_iter=args.ecc_iterations, epsilon=args.ecc_epsilon)
+
     # 4. Warp + 5. Crop
     crop_before, crop_after, crop_offset = warp_and_crop(before_img, after_img, H)
 
     # 6. Compute diffs
     diffs = compute_diffs(crop_before, crop_after, args)
 
-    # Determine primary method for output
-    if args.method == "all":
-        primary_name = "gradient"
-    else:
-        primary_name = args.method
-    primary_diff = diffs[primary_name]
-
-    # 7. Heatmap overlay
-    output, change_mask = build_heatmap_overlay(crop_after, primary_diff, args.sensitivity, args.alpha, args.min_area)
-
-    # 8. Annotate
-    output = annotate(
-        output, change_mask, args.sensitivity, primary_name,
-        tags_before, crop_offset, not args.no_annotate,
-    )
-
-    # 9. Save
     os.makedirs(args.output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%H%M%S")
 
-    out_path = os.path.join(args.output_dir, f"diff-{date_suffix}_{timestamp}.png")
-    cv2.imwrite(out_path, output)
-    print(f"  Saved {out_path}")
+    def save_result(method_name, diff_map, suffix=""):
+        """Generate heatmap, annotate, and save for one method."""
+        overlay, mask = build_heatmap_overlay(crop_after, diff_map, args.sensitivity, args.alpha, args.min_area)
+        overlay = annotate(
+            overlay, mask, args.sensitivity, method_name,
+            tags_before, crop_offset, not args.no_annotate,
+        )
 
-    if not args.no_debug:
-        debug_path = os.path.join(args.output_dir, f"diff_debug-{date_suffix}_{timestamp}.png")
-        save_debug_panel(crop_before, crop_after, change_mask, primary_diff, debug_path)
-        print(f"  Saved {debug_path}")
-
-    # Backup — copy to backup dir with unique names (never overwrite)
-    if not args.no_backup:
-        os.makedirs(args.backup_dir, exist_ok=True)
-        backup_out = os.path.join(args.backup_dir, os.path.basename(out_path))
-        # If file already exists, append a counter to avoid overwriting
-        if os.path.exists(backup_out):
-            base, ext = os.path.splitext(backup_out)
-            i = 1
-            while os.path.exists(f"{base}_{i}{ext}"):
-                i += 1
-            backup_out = f"{base}_{i}{ext}"
-        shutil.copy2(out_path, backup_out)
-        print(f"  Backup {backup_out}")
+        tag = f"-{suffix}" if suffix else ""
+        out_path = os.path.join(args.output_dir, f"diff-{date_suffix}_{timestamp}{tag}.png")
+        cv2.imwrite(out_path, overlay)
+        print(f"  Saved {out_path}")
 
         if not args.no_debug:
-            backup_dbg = os.path.join(args.backup_dir, os.path.basename(debug_path))
-            if os.path.exists(backup_dbg):
-                base, ext = os.path.splitext(backup_dbg)
-                i = 1
-                while os.path.exists(f"{base}_{i}{ext}"):
-                    i += 1
-                backup_dbg = f"{base}_{i}{ext}"
-            shutil.copy2(debug_path, backup_dbg)
-            print(f"  Backup {backup_dbg}")
+            debug_path = os.path.join(args.output_dir, f"diff_debug-{date_suffix}_{timestamp}{tag}.png")
+            save_debug_panel(crop_before, crop_after, mask, diff_map, debug_path)
+            print(f"  Saved {debug_path}")
+
+        # Backup
+        if not args.no_backup:
+            os.makedirs(args.backup_dir, exist_ok=True)
+            for src in [out_path] + ([debug_path] if not args.no_debug else []):
+                dst = os.path.join(args.backup_dir, os.path.basename(src))
+                if os.path.exists(dst):
+                    base, ext = os.path.splitext(dst)
+                    i = 1
+                    while os.path.exists(f"{base}_{i}{ext}"):
+                        i += 1
+                    dst = f"{base}_{i}{ext}"
+                shutil.copy2(src, dst)
+                print(f"  Backup {dst}")
+
+        return diff_map, mask
+
+    # 7–9. Generate outputs — one per method when "all", otherwise just the selected one
+    if args.method == "all":
+        primary_diff = None
+        for method_name, diff_map in diffs.items():
+            print(f"\n  --- {method_name} ---")
+            d, _ = save_result(method_name, diff_map, suffix=method_name)
+            if primary_diff is None:
+                primary_diff = d  # first method for summary stats
+    else:
+        primary_diff = diffs[args.method]
+        save_result(args.method, primary_diff)
 
     # Summary
     changed_pct = (primary_diff > args.sensitivity).mean() * 100
