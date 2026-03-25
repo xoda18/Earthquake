@@ -74,9 +74,6 @@ class LSTMVisualizer:
         self.samples_since_inference = 0
         self.current_prob = 0.0
         self.current_label = "noise"
-        self.stable_label = "noise"       # debounced label for dashboard
-        self.consecutive_eq = 0            # consecutive EARTHQUAKE inferences
-        self.EQ_DEBOUNCE = 3               # need 3 in a row to confirm
         self.prob_history = deque(maxlen=60)
         self.prob_times = deque(maxlen=60)
         self.detection_count = 0
@@ -151,10 +148,6 @@ class LSTMVisualizer:
                 self.total_samples += 1
                 mag = np.sqrt(ax**2 + ay**2 + az**2)
 
-                # Write live buffer for web dashboard (every 10 samples)
-                if self.total_samples % 10 == 0:
-                    self._write_live_buffer()
-
                 with self.lock:
                     self.times.append(ts_s)
                     self.data_x.append(ax)
@@ -186,32 +179,6 @@ class LSTMVisualizer:
                 ser.close()
             except Exception:
                 pass
-
-    def _write_live_buffer(self):
-        """Write last 300 samples to JSON file for web dashboard (local, fast)."""
-        try:
-            with self.lock:
-                n = min(300, len(self.times))
-                if n < 2:
-                    return
-                mag_list = list(self.data_mag)[-n:]
-                buf = {
-                    "t": [round(x, 3) for x in list(self.times)[-n:]],
-                    "x": [round(x, 4) for x in list(self.data_x)[-n:]],
-                    "y": [round(x, 4) for x in list(self.data_y)[-n:]],
-                    "z": [round(x, 4) for x in list(self.data_z)[-n:]],
-                    "mag": [round(x, 4) for x in mag_list],
-                    "prob": self.current_prob,
-                    "label": self.stable_label,
-                    "current_mag": mag_list[-1] if mag_list else 0,
-                    "pga": self.peak_accel,
-                    "detections": self.detection_count,
-                    "samples": self.total_samples,
-                }
-            with open(LIVE_BUFFER, "w") as f:
-                json.dump(buf, f)
-        except Exception:
-            pass
 
     def log_earthquake(self, prob, pga, ax, ay, az, mag):
         """Write earthquake event to Supabase (read by swarm agent)."""
@@ -255,17 +222,6 @@ class LSTMVisualizer:
                 self.current_label = label
                 self.prob_history.append(prob)
                 self.prob_times.append(ts)
-
-                # Debounce: need EQ_DEBOUNCE consecutive EARTHQUAKE to confirm
-                if label == "EARTHQUAKE":
-                    self.consecutive_eq += 1
-                else:
-                    self.consecutive_eq = 0
-
-                if self.consecutive_eq >= self.EQ_DEBOUNCE:
-                    self.stable_label = "EARTHQUAKE"
-                elif self.consecutive_eq == 0:
-                    self.stable_label = "noise"
 
                 if label == "EARTHQUAKE" and not self.last_was_earthquake:
                     self.detection_count += 1
@@ -338,6 +294,27 @@ class LSTMVisualizer:
 
         t0 = t[0]
         tr = t - t0
+
+        # Write live buffer for web dashboard — same data matplotlib uses
+        try:
+            n = min(300, len(t))
+            buf = {
+                "t": [round(v, 3) for v in t[-n:].tolist()],
+                "x": [round(v, 4) for v in x[-n:].tolist()],
+                "y": [round(v, 4) for v in y[-n:].tolist()],
+                "z": [round(v, 4) for v in z[-n:].tolist()],
+                "mag": [round(v, 4) for v in mag[-n:].tolist()],
+                "prob": prob,
+                "label": label,
+                "current_mag": round(float(mag[-1]), 4),
+                "pga": peak,
+                "detections": det,
+                "samples": n_samples,
+            }
+            with open(LIVE_BUFFER, "w") as f:
+                json.dump(buf, f)
+        except Exception:
+            pass
 
         # Update XYZ lines (fast — no clear)
         self.line_x.set_data(tr, x)
