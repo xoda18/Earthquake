@@ -211,3 +211,16 @@ __marimo__/
 Dataset_Central/
 models/datasets_for_trainings/
 *.hdf5
+
+# Image diff outputs and backups
+crack_detection/image_diff/output_backup/
+crack_detection/image_diff/output/
+crack_detection/image_diff/input/
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tiff
+*.gif
