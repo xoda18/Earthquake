@@ -1,76 +1,100 @@
-# Earthquake Detection System
+# JASS Earthquake Detection — Swarm Agent
 
-Real-time earthquake detection using MPU6500 accelerometer + Arduino + LSTM neural network in Docker.
+Seismic detection + drone damage assessment for the JASS 2026 Smart Eco City (Paphos, Cyprus).
 
-## Setup
+Integrates with the [JASS Swarm](https://github.com/JASS-2026-Cyprus/swarm) multi-agent system via Redis.
 
-```bash
-git clone https://github.com/JASS-2026-Cyprus/Earthquake.git
-cd Earthquake
-./setup.sh
-```
-
-## USING:
-
-```bash
-
- cd ~/Desktop/NUP/JASS/Earthquake && source ../venv/bin/activate &&
-  python3 detection/streaming/stream.py --detect --blackboard --viz
-  --threshold 0.7 --cooldown 5
+## Architecture
 
 ```
-
-Needs: Docker, Arduino Uno + MPU6500 sensor connected via USB.
-
-## Run
-
-### Option 1: Docker (LSTM classification + blackboard)
-
-```bash
-docker run --rm --device /dev/ttyACM0 earthquake-detector --profile table
+MPU6500 Sensor → LSTM Detection → detection/sensor_log.jsonl
+                                        ↓
+                               EarthAgent (swarm)
+                               reads logs via tools.py
+                                        ↓
+                               report_observation → Redis shared log
+                                        ↓
+                               MaintenanceAgent dispatches drone
+                                        ↓
+                               Drone scans → drone/drone_log.jsonl
+                                        ↓
+                               EarthAgent reads drone log
+                                        ↓
+                               report_observation → damage locations to all agents
 ```
 
-### Option 2: All-in-one Python (streaming + detection + blackboard + visualization)
+## Quick Start
+
+### 1. Run sensor (writes to `detection/sensor_log.jsonl`)
 
 ```bash
-cd ~/Desktop/NUP/JASS/Earthquake && source ../venv/bin/activate
+# With visualization
+python3 detection/realtime_visualizer.py --port /dev/tty.usbmodemXXXX
 
-# Everything: data + detection + blackboard + live graphs
-python3 detection/streaming/stream.py --detect --blackboard --viz
+# CLI only
+python3 detection/realtime_predict.py --port /dev/tty.usbmodemXXXX
 
-# Without graphs
-python3 detection/streaming/stream.py --detect --blackboard
-
-# Stream only
-python3 detection/streaming/stream.py
-
-# Stream + graphs (no blackboard)
-python3 detection/streaming/stream.py --viz
-
-# Save to CSV
-python3 detection/streaming/stream.py --detect --blackboard --viz --save data.csv
+# Find your port
+ls /dev/tty.usb*
 ```
 
-### Flags
+### 2. Run drone simulator (writes to `drone/drone_log.jsonl`)
 
-| Flag | Description |
+```bash
+python3 drone/mock_damage.py --count 5
+python3 drone/mock_damage.py --loop 10 --count 2
+```
+
+### 3. Run swarm (in the swarm repo)
+
+```bash
+cd /path/to/swarm
+docker compose up --build
+# or
+python main.py
+```
+
+EarthAgent reads `sensor_log.jsonl` and `drone_log.jsonl` via its tools.
+
+## Swarm Integration
+
+### Agent config: `swarm/agents/earth/agent.toml`
+
+EarthAgent monitors seismic activity and coordinates drone response.
+
+### Tools: `swarm/agents/earth/tools.py`
+
+| Tool | Description |
 |------|-------------|
-| `--detect` | Enable STA/LTA earthquake detection |
-| `--blackboard` | Post data to ORB blackboard |
-| `--viz` | Show live graphs (3D vector + waveforms + STA/LTA) |
-| `--save FILE` | Save data to CSV |
-| `--mode` | Detection mode: `earthquake`, `table_knock`, `optimized` |
-| `--rate N` | Print rate per second (default 5) |
-| `--port` | Serial port (auto-detected) |
+| `read_sensor_log(last_n)` | Read last N earthquake detections |
+| `read_drone_log(last_n)` | Read last N drone damage reports |
+| `get_new_earthquakes(since_epoch)` | Poll for new earthquakes since timestamp |
+| `get_new_damage_reports(since_epoch)` | Poll for new damage since timestamp |
 
-## Docker Profiles
+### Log formats
 
-| Profile | Use case | Gain | Threshold |
-|---------|----------|------|-----------|
-| `default` | Balanced | 1x | 0.7 |
-| `table` | Table demo — knocks detected | 3x | 0.8 |
-| `sensitive` | Light taps and vibrations | 5x | 0.6 |
-| `earthquake` | Real seismic only | 1x | 0.9 |
+**`detection/sensor_log.jsonl`** (one JSON per line):
+```json
+{"timestamp":"2026-03-25T10:00:00Z","epoch":1774000000,"type":"earthquake","probability":0.95,"pga_g":0.15,"ax":0.08,"ay":-0.01,"az":-1.02,"magnitude_g":1.03}
+```
+
+**`drone/drone_log.jsonl`** (one JSON per line):
+```json
+{"timestamp":"2026-03-25T10:01:00Z","epoch":1774000060,"type":"damage","eventId":"uuid","lat":34.765,"lon":32.420,"severity":"high","damage_type":"Wall crack detected","building":"Hotel","confidence":0.92}
+```
+
+## Model Training
+
+```bash
+# Train on real datasets (LEN-DB + Central Italy)
+python3 models/train_lstm_real.py
+
+# Train on synthetic data
+python3 models/train_lstm_csv.py
+
+# Test model
+python3 models/earthquake_simulator/test_model.py
+```
 
 ## Hardware Wiring
 
@@ -81,26 +105,24 @@ MPU6500 SDA → Arduino A4
 MPU6500 SCL → Arduino A5
 ```
 
-## How It Works
+## Project Structure
 
 ```
-MPU6500 → Arduino (100Hz serial) → Python/Docker → detection + blackboard + visualization
-```
-
-1. Sensor reads acceleration (ax, ay, az) at 100 Hz
-2. Gravity is calibrated and removed from signal
-3. STA/LTA detection finds energy spikes (or LSTM classifies in Docker)
-4. Results posted to ORB blackboard for other agents
-5. Live 3D + waveform visualization (optional)
-
-## Docs
-
-- [Streaming & Docker details](detection/streaming/README.md)
-- [Troubleshooting](detection/streaming/TROUBLESHOOTING.md)
-- [System prompt for ORB](earthquake_agent_system_prompt.md)
-
-## If Arduino Disconnects
-
-```bash
-./detection/streaming/setup.sh
+Earthquake/
+├── detection/                    # Sensor + LSTM inference
+│   ├── realtime_predict.py       # CLI inference
+│   ├── realtime_visualizer.py    # Visualization + writes sensor_log.jsonl
+│   ├── sensor_log.jsonl          # ← earthquake events (runtime)
+│   ├── hardware/                 # Arduino serial interface
+│   └── streaming/                # Docker variant
+├── drone/                        # Drone damage simulation
+│   ├── mock_damage.py            # Writes drone_log.jsonl
+│   └── drone_log.jsonl           # ← damage reports (runtime)
+├── models/                       # LSTM model + training
+│   ├── lstm_earthquake_model.h5
+│   ├── lstm_scaler.pkl
+│   ├── train_lstm_real.py
+│   ├── train_lstm_csv.py
+│   └── earthquake_simulator/
+└── hypothesis_generator/         # LLM geological analysis
 ```

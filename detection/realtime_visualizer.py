@@ -15,11 +15,10 @@ import sys
 import os
 import time
 import threading
-import uuid
+import json
 from collections import deque
 from datetime import datetime, timezone
 import numpy as np
-import requests
 
 os.environ["MPLBACKEND"] = "TkAgg"
 import matplotlib
@@ -42,8 +41,8 @@ COLOR_THRESH = "#ff922b"
 BG_QUIET = "#1a2f1a"
 BG_EARTHQUAKE = "#3f1a1a"
 
-BLACKBOARD_URL = "https://blackboard.jass.school/blackboard"
-AGENT_NAME = "earthquake"
+# Log file for sensor events (read by swarm agent via tools.py)
+SENSOR_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_log.jsonl")
 
 
 class LSTMVisualizer:
@@ -172,53 +171,25 @@ class LSTMVisualizer:
             except Exception:
                 pass
 
-    def post_to_blackboard(self, prob, pga, ax, ay, az, mag):
-        """Post earthquake event to blackboard. Silently fails if server unavailable."""
-        import json
+    def log_earthquake(self, prob, pga, ax, ay, az, mag):
+        """Append earthquake event to sensor_log.jsonl (read by swarm agent)."""
         try:
-            content = json.dumps({
-                "timestamp": time.time(),
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "epoch": time.time(),
+                "type": "earthquake",
+                "probability": round(prob, 4),
+                "pga_g": round(pga, 4),
                 "ax": round(ax, 3),
                 "ay": round(ay, 3),
                 "az": round(az, 3),
                 "magnitude_g": round(mag, 4),
-                "amplitude_g": round(pga, 4),
-                "probability": round(prob, 4),
-                "label": "earthquake",
-                "profile": "lstm",
-            })
-            requests.post(
-                BLACKBOARD_URL,
-                json={
-                    "agent": AGENT_NAME,
-                    "type": "earthquake_sensor",
-                    "content": content,
-                    "confidence": round(prob, 4),
-                },
-                timeout=3,
-            )
-            # Also dispatch drone
-            dispatch = json.dumps({
-                "command": "dispatch",
-                "target_lat": 34.765,
-                "target_lon": 32.420,
-                "pga": round(pga, 4),
-                "scan_radius_m": 500,
-                "timestamp": time.time(),
-            })
-            requests.post(
-                BLACKBOARD_URL,
-                json={
-                    "agent": AGENT_NAME,
-                    "type": "drone_dispatch",
-                    "content": dispatch,
-                    "confidence": 1.0,
-                },
-                timeout=3,
-            )
-            print(f"  >> Posted to blackboard (P={prob:.1%}, PGA={pga:.3f}g) + drone dispatched")
-        except Exception:
-            pass  # server unavailable — silently skip
+            }
+            with open(SENSOR_LOG, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+            print(f"  >> Logged earthquake (P={prob:.1%}, PGA={pga:.3f}g)")
+        except Exception as e:
+            print(f"  >> Log error: {e}")
 
     def inference_thread(self):
         while self.running:
@@ -247,7 +218,7 @@ class LSTMVisualizer:
                 self.prob_times.append(ts)
                 if label == "EARTHQUAKE" and not self.last_was_earthquake:
                     self.detection_count += 1
-                    self.post_to_blackboard(prob, pga, last_ax, last_ay, last_az, last_mag)
+                    self.log_earthquake(prob, pga, last_ax, last_ay, last_az, last_mag)
                 self.last_was_earthquake = (label == "EARTHQUAKE")
 
     def setup_figure(self):
