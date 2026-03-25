@@ -182,8 +182,9 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Peak Ground Acceleration</div>
-            <div class="card-value" id="pga-value">0.000<span style="font-size:16px;color:#64748b">g</span></div>
+            <div class="card-title">Current Magnitude</div>
+            <div class="card-value" id="cur-mag-value">0.000<span style="font-size:16px;color:#64748b">g</span></div>
+            <div class="card-sub">Peak: <span id="pga-value">0.000</span>g</div>
         </div>
 
         <div class="card">
@@ -427,9 +428,10 @@ async function fetchLive() {
 
         // Update sensor values from live data
         const prob = (d.prob || 0) * 100;
-        const isEq = prob > 50;
+        const isEq = d.label === 'EARTHQUAKE';
         document.getElementById('prob-value').innerHTML = `${prob.toFixed(1)}<span style="font-size:16px;color:#64748b">%</span>`;
-        document.getElementById('pga-value').innerHTML = `${(d.pga||0).toFixed(3)}<span style="font-size:16px;color:#64748b">g</span>`;
+        document.getElementById('cur-mag-value').innerHTML = `${(d.current_mag||0).toFixed(3)}<span style="font-size:16px;color:#64748b">g</span>`;
+        document.getElementById('pga-value').textContent = (d.pga||0).toFixed(3);
 
         const last = d.x.length - 1;
         document.getElementById('ax-value').textContent = (d.x[last]||0).toFixed(3);

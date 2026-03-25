@@ -191,15 +191,16 @@ class LSTMVisualizer:
                 n = min(300, len(self.times))
                 if n < 2:
                     return
-                t = list(self.times)[-n:]
+                mag_list = list(self.data_mag)[-n:]
                 buf = {
-                    "t": [round(x, 3) for x in t],
+                    "t": [round(x, 3) for x in list(self.times)[-n:]],
                     "x": [round(x, 4) for x in list(self.data_x)[-n:]],
                     "y": [round(x, 4) for x in list(self.data_y)[-n:]],
                     "z": [round(x, 4) for x in list(self.data_z)[-n:]],
-                    "mag": [round(x, 4) for x in list(self.data_mag)[-n:]],
+                    "mag": [round(x, 4) for x in mag_list],
                     "prob": self.current_prob,
                     "label": self.current_label,
+                    "current_mag": mag_list[-1] if mag_list else 0,
                     "pga": self.peak_accel,
                     "detections": self.detection_count,
                     "samples": self.total_samples,
