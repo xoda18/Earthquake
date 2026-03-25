@@ -74,6 +74,9 @@ class LSTMVisualizer:
         self.samples_since_inference = 0
         self.current_prob = 0.0
         self.current_label = "noise"
+        self.stable_label = "noise"       # debounced label for dashboard
+        self.consecutive_eq = 0            # consecutive EARTHQUAKE inferences
+        self.EQ_DEBOUNCE = 3               # need 3 in a row to confirm
         self.prob_history = deque(maxlen=60)
         self.prob_times = deque(maxlen=60)
         self.detection_count = 0
@@ -199,7 +202,7 @@ class LSTMVisualizer:
                     "z": [round(x, 4) for x in list(self.data_z)[-n:]],
                     "mag": [round(x, 4) for x in mag_list],
                     "prob": self.current_prob,
-                    "label": self.current_label,
+                    "label": self.stable_label,
                     "current_mag": mag_list[-1] if mag_list else 0,
                     "pga": self.peak_accel,
                     "detections": self.detection_count,
@@ -252,6 +255,18 @@ class LSTMVisualizer:
                 self.current_label = label
                 self.prob_history.append(prob)
                 self.prob_times.append(ts)
+
+                # Debounce: need EQ_DEBOUNCE consecutive EARTHQUAKE to confirm
+                if label == "EARTHQUAKE":
+                    self.consecutive_eq += 1
+                else:
+                    self.consecutive_eq = 0
+
+                if self.consecutive_eq >= self.EQ_DEBOUNCE:
+                    self.stable_label = "EARTHQUAKE"
+                elif self.consecutive_eq == 0:
+                    self.stable_label = "noise"
+
                 if label == "EARTHQUAKE" and not self.last_was_earthquake:
                     self.detection_count += 1
                     self.log_earthquake(prob, pga, last_ax, last_ay, last_az, last_mag)
