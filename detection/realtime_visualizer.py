@@ -45,6 +45,9 @@ BG_EARTHQUAKE = "#3f1a1a"
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import supabase_client as sb
 
+# Live buffer file for web dashboard (local, no delay)
+LIVE_BUFFER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "live_buffer.json")
+
 
 class LSTMVisualizer:
 
@@ -145,6 +148,10 @@ class LSTMVisualizer:
                 self.total_samples += 1
                 mag = np.sqrt(ax**2 + ay**2 + az**2)
 
+                # Write live buffer for web dashboard (every 10 samples)
+                if self.total_samples % 10 == 0:
+                    self._write_live_buffer()
+
                 with self.lock:
                     self.times.append(ts_s)
                     self.data_x.append(ax)
@@ -167,10 +174,40 @@ class LSTMVisualizer:
         except Exception as e:
             print(f"Reader error: {e}")
         finally:
+            # Clean up live buffer
+            try:
+                os.remove(LIVE_BUFFER)
+            except OSError:
+                pass
             try:
                 ser.close()
             except Exception:
                 pass
+
+    def _write_live_buffer(self):
+        """Write last 300 samples to JSON file for web dashboard (local, fast)."""
+        try:
+            with self.lock:
+                n = min(300, len(self.times))
+                if n < 2:
+                    return
+                t = list(self.times)[-n:]
+                buf = {
+                    "t": [round(x, 3) for x in t],
+                    "x": [round(x, 4) for x in list(self.data_x)[-n:]],
+                    "y": [round(x, 4) for x in list(self.data_y)[-n:]],
+                    "z": [round(x, 4) for x in list(self.data_z)[-n:]],
+                    "mag": [round(x, 4) for x in list(self.data_mag)[-n:]],
+                    "prob": self.current_prob,
+                    "label": self.current_label,
+                    "pga": self.peak_accel,
+                    "detections": self.detection_count,
+                    "samples": self.total_samples,
+                }
+            with open(LIVE_BUFFER, "w") as f:
+                json.dump(buf, f)
+        except Exception:
+            pass
 
     def log_earthquake(self, prob, pga, ax, ay, az, mag):
         """Write earthquake event to Supabase (read by swarm agent)."""

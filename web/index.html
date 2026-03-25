@@ -195,6 +195,16 @@
         </div>
 
         <div class="card">
+            <div class="card-title">Live Magnitude</div>
+            <div class="mini-chart"><canvas id="mag-chart"></canvas></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Live Acceleration (X/Y/Z)</div>
+            <div class="mini-chart"><canvas id="xyz-chart"></canvas></div>
+        </div>
+
+        <div class="card">
             <div class="card-title">Recent Earthquakes</div>
             <div id="eq-list"><div class="event-item"><span class="event-detail">No events yet</span></div></div>
         </div>
@@ -366,6 +376,96 @@ async function poll() {
 
 poll();
 setInterval(poll, POLL_MS);
+
+// ── Live chart (local, fast) ─────────────────────────────
+const LIVE_POLL_MS = 300;
+
+function drawChart(canvasId, datasets, yMin, yMax) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.parentElement.clientWidth;
+    const h = canvas.parentElement.clientHeight;
+    canvas.width = w;
+    canvas.height = h;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid lines
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i++) {
+        const y = (h / 4) * i;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+
+    for (const { data, color } of datasets) {
+        if (!data || data.length < 2) continue;
+        const n = data.length;
+        const xStep = w / (n - 1);
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+            const x = i * xStep;
+            const val = Math.max(yMin, Math.min(yMax, data[i]));
+            const y = h - ((val - yMin) / (yMax - yMin)) * h;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+}
+
+async function fetchLive() {
+    try {
+        const resp = await fetch('/api/live');
+        if (!resp.ok) return;
+        const d = await resp.json();
+        if (!d.t || d.t.length < 2) return;
+
+        // Update sensor values from live data
+        const prob = (d.prob || 0) * 100;
+        const isEq = prob > 50;
+        document.getElementById('prob-value').innerHTML = `${prob.toFixed(1)}<span style="font-size:16px;color:#64748b">%</span>`;
+        document.getElementById('pga-value').innerHTML = `${(d.pga||0).toFixed(3)}<span style="font-size:16px;color:#64748b">g</span>`;
+
+        const last = d.x.length - 1;
+        document.getElementById('ax-value').textContent = (d.x[last]||0).toFixed(3);
+        document.getElementById('ay-value').textContent = (d.y[last]||0).toFixed(3);
+        document.getElementById('az-value').textContent = (d.z[last]||0).toFixed(3);
+        document.getElementById('mag-value').textContent = (d.mag[last]||0).toFixed(3);
+
+        const badge = document.getElementById('status-badge');
+        if (isEq) {
+            badge.textContent = 'EARTHQUAKE';
+            badge.className = 'badge earthquake';
+        } else {
+            badge.textContent = 'QUIET';
+            badge.className = 'badge quiet';
+        }
+
+        // Draw magnitude chart
+        const magMin = Math.min(...d.mag) - 0.05;
+        const magMax = Math.max(...d.mag) + 0.05;
+        drawChart('mag-chart', [{ data: d.mag, color: '#ffd43b' }], magMin, magMax);
+
+        // Draw XYZ chart
+        const all = [...d.x, ...d.y, ...d.z];
+        const lo = Math.min(...all) - 0.05;
+        const hi = Math.max(...all) + 0.05;
+        drawChart('xyz-chart', [
+            { data: d.x, color: '#ff6b6b' },
+            { data: d.y, color: '#51cf66' },
+            { data: d.z, color: '#339af0' },
+        ], lo, hi);
+
+    } catch (e) {}
+}
+
+fetchLive();
+setInterval(fetchLive, LIVE_POLL_MS);
 </script>
 </body>
 </html>

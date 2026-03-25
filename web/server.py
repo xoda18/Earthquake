@@ -16,6 +16,7 @@ import supabase_client as sb
 
 PORT = 8080
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
+LIVE_BUFFER = os.path.join(WEB_DIR, "..", "detection", "live_buffer.json")
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -23,10 +24,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
     def do_GET(self):
-        if self.path.startswith("/api/"):
+        if self.path == "/api/live":
+            self.serve_live_buffer()
+        elif self.path.startswith("/api/"):
             self.proxy_supabase()
         else:
             super().do_GET()
+
+    def serve_live_buffer(self):
+        """Serve local live sensor data (no Supabase, no delay)."""
+        try:
+            with open(LIVE_BUFFER, "r") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(data.encode())
+        except FileNotFoundError:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"t":[],"mag":[]}')
 
     def proxy_supabase(self):
         """Proxy /api/<table>?params → Supabase REST API."""
