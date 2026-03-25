@@ -1,6 +1,6 @@
 """
 mock_damage.py
-Simulates drone damage assessment — writes crack locations to drone_log.jsonl.
+Simulates drone damage assessment — writes crack locations to Supabase.
 
 Usage:
     python drone/mock_damage.py                  # write once
@@ -9,14 +9,15 @@ Usage:
 """
 
 import argparse
-import json
 import os
+import sys
 import random
 import time
 import uuid
 from datetime import datetime, timezone
 
-DRONE_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone_log.jsonl")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import supabase_client as sb
 
 # Paphos LAND-ONLY zones
 PAPHOS_ZONES = [
@@ -39,7 +40,7 @@ BUILDINGS = [
 
 
 def generate_and_log():
-    """Generate a random damage report and write to drone_log.jsonl."""
+    """Generate a random damage report and write to Supabase."""
     zone = random.choice(PAPHOS_ZONES)
     lat = round(random.uniform(*zone["lat"]), 6)
     lon = round(random.uniform(*zone["lon"]), 6)
@@ -48,10 +49,8 @@ def generate_and_log():
     building = random.choice(BUILDINGS)
 
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event_id": str(uuid.uuid4()),
         "epoch": time.time(),
-        "type": "damage",
-        "eventId": str(uuid.uuid4()),
         "lat": lat,
         "lon": lon,
         "severity": severity,
@@ -62,24 +61,21 @@ def generate_and_log():
         "confidence": round(random.uniform(0.7, 0.99), 2),
     }
 
-    with open(DRONE_LOG, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-
-    print(f"Logged: {severity:>8} | {lat:.4f}, {lon:.4f} | {entry['description']}")
-    return entry
+    ok = sb.insert("drone_reports", entry)
+    status = "OK" if ok else "FAIL"
+    print(f"[{status}] {severity:>8} | {lat:.4f}, {lon:.4f} | {entry['description']}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Mock drone damage → drone_log.jsonl")
+    parser = argparse.ArgumentParser(description="Mock drone damage → Supabase")
     parser.add_argument("--loop", type=int, default=0, help="Write every N seconds (0 = once)")
     parser.add_argument("--count", type=int, default=1, help="Reports per cycle")
     args = parser.parse_args()
 
-    print(f"Drone damage simulator → {DRONE_LOG}")
+    print(f"Drone damage simulator → Supabase")
     print("-" * 60)
 
     if args.loop > 0:
-        print(f"Writing {args.count} report(s) every {args.loop}s (Ctrl+C to stop)\n")
         try:
             while True:
                 for _ in range(args.count):

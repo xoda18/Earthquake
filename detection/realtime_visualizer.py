@@ -41,8 +41,9 @@ COLOR_THRESH = "#ff922b"
 BG_QUIET = "#1a2f1a"
 BG_EARTHQUAKE = "#3f1a1a"
 
-# Log file for sensor events (read by swarm agent via tools.py)
-SENSOR_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_log.jsonl")
+# Supabase client (shared)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import supabase_client as sb
 
 
 class LSTMVisualizer:
@@ -172,24 +173,21 @@ class LSTMVisualizer:
                 pass
 
     def log_earthquake(self, prob, pga, ax, ay, az, mag):
-        """Append earthquake event to sensor_log.jsonl (read by swarm agent)."""
-        try:
-            entry = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "epoch": time.time(),
-                "type": "earthquake",
-                "probability": round(prob, 4),
-                "pga_g": round(pga, 4),
-                "ax": round(ax, 3),
-                "ay": round(ay, 3),
-                "az": round(az, 3),
-                "magnitude_g": round(mag, 4),
-            }
-            with open(SENSOR_LOG, "a") as f:
-                f.write(json.dumps(entry) + "\n")
-            print(f"  >> Logged earthquake (P={prob:.1%}, PGA={pga:.3f}g)")
-        except Exception as e:
-            print(f"  >> Log error: {e}")
+        """Write earthquake event to Supabase (read by swarm agent)."""
+        entry = {
+            "epoch": time.time(),
+            "probability": round(prob, 4),
+            "pga_g": round(pga, 4),
+            "ax": round(ax, 3),
+            "ay": round(ay, 3),
+            "az": round(az, 3),
+            "magnitude_g": round(mag, 4),
+        }
+        ok = sb.insert("sensor_events", entry)
+        if ok:
+            print(f"  >> Supabase: earthquake logged (P={prob:.1%}, PGA={pga:.3f}g)")
+        else:
+            print(f"  >> Supabase: failed to log")
 
     def inference_thread(self):
         while self.running:
