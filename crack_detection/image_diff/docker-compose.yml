@@ -1,0 +1,7 @@
+services:
+  crack-detector:
+    build: .
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./output_backup:/app/output_backup
