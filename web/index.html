@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JASS Earthquake Monitor</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;700&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', system-ui, sans-serif; background: #0a0e17; color: #e2e8f0; overflow: hidden; height: 100vh; }
+
+        .dashboard { display: grid; grid-template-columns: 320px 1fr 320px; grid-template-rows: 56px 1fr; height: 100vh; }
+
+        /* Header */
+        .header {
+            grid-column: 1 / -1;
+            background: #111827;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+        }
+        .header h1 { font-size: 16px; font-weight: 700; color: #f1f5f9; letter-spacing: -0.5px; }
+        .header .logo { display: flex; align-items: center; gap: 10px; }
+        .header .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: pulse 2s infinite; }
+        .header .status-text { font-size: 12px; color: #94a3b8; font-family: 'JetBrains Mono', monospace; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        /* Left panel — sensor */
+        .panel-left {
+            background: #111827;
+            border-right: 1px solid #1e293b;
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        /* Right panel — drone */
+        .panel-right {
+            background: #111827;
+            border-left: 1px solid #1e293b;
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        /* Center — map */
+        .map-container { position: relative; }
+        #map { width: 100%; height: 100%; }
+
+        /* Cards */
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid #334155;
+        }
+        .card-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #64748b;
+            margin-bottom: 10px;
+        }
+        .card-value {
+            font-size: 28px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .card-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+
+        /* Status badge */
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .badge.quiet { background: #064e3b; color: #34d399; }
+        .badge.earthquake { background: #7f1d1d; color: #fca5a5; animation: flash 0.5s infinite; }
+        @keyframes flash { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+        /* Severity colors */
+        .sev-critical { color: #ef4444; }
+        .sev-high { color: #f59e0b; }
+        .sev-moderate { color: #eab308; }
+        .sev-low { color: #22c55e; }
+
+        /* Event list */
+        .event-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid #334155;
+            font-size: 12px;
+        }
+        .event-item.critical { border-left-color: #ef4444; }
+        .event-item.high { border-left-color: #f59e0b; }
+        .event-item.moderate { border-left-color: #eab308; }
+        .event-item.low { border-left-color: #22c55e; }
+
+        .event-item .event-title { font-weight: 600; color: #e2e8f0; }
+        .event-item .event-detail { color: #94a3b8; margin-top: 3px; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+
+        /* Gauge */
+        .gauge-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #1e293b; }
+        .gauge-label { font-size: 12px; color: #94a3b8; }
+        .gauge-value { font-size: 13px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+        /* Sensor chart placeholder */
+        .mini-chart {
+            width: 100%;
+            height: 80px;
+            background: #0f172a;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .mini-chart canvas { width: 100%; height: 100%; }
+
+        /* Map overlay */
+        .map-overlay {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            z-index: 1000;
+            background: rgba(17, 24, 39, 0.9);
+            backdrop-filter: blur(8px);
+            border-radius: 12px;
+            padding: 12px 16px;
+            border: 1px solid #334155;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        /* Leaflet dark tiles */
+        .leaflet-tile-pane { filter: brightness(0.7) contrast(1.1) saturate(0.8); }
+        .leaflet-container { background: #0a0e17; }
+
+        /* Popup styling */
+        .leaflet-popup-content-wrapper {
+            background: #1e293b;
+            color: #e2e8f0;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+        }
+        .leaflet-popup-tip { background: #1e293b; }
+    </style>
+</head>
+<body>
+<div class="dashboard">
+    <!-- Header -->
+    <div class="header">
+        <div class="logo">
+            <span style="font-size:20px">&#9968;</span>
+            <h1>JASS Earthquake Monitor</h1>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px">
+            <span class="status-text" id="last-update">--:--:--</span>
+            <span class="dot"></span>
+            <span class="status-text">LIVE</span>
+        </div>
+    </div>
+
+    <!-- Left: Sensor -->
+    <div class="panel-left">
+        <div class="card">
+            <div class="card-title">Seismic Status</div>
+            <span class="badge quiet" id="status-badge">QUIET</span>
+        </div>
+
+        <div class="card">
+            <div class="card-title">LSTM Probability</div>
+            <div class="card-value" id="prob-value">0.0<span style="font-size:16px;color:#64748b">%</span></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Peak Ground Acceleration</div>
+            <div class="card-value" id="pga-value">0.000<span style="font-size:16px;color:#64748b">g</span></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Accelerometer</div>
+            <div class="gauge-row"><span class="gauge-label">X</span><span class="gauge-value" id="ax-value">0.000</span></div>
+            <div class="gauge-row"><span class="gauge-label">Y</span><span class="gauge-value" id="ay-value">0.000</span></div>
+            <div class="gauge-row"><span class="gauge-label">Z</span><span class="gauge-value" id="az-value">0.000</span></div>
+            <div class="gauge-row"><span class="gauge-label">|a|</span><span class="gauge-value" id="mag-value">0.000</span></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Recent Earthquakes</div>
+            <div id="eq-list"><div class="event-item"><span class="event-detail">No events yet</span></div></div>
+        </div>
+    </div>
+
+    <!-- Center: Map -->
+    <div class="map-container">
+        <div id="map"></div>
+        <div class="map-overlay">
+            <span>Damage zones: <strong id="zone-count">0</strong></span> &nbsp;|&nbsp;
+            <span>Critical: <strong id="critical-count" style="color:#ef4444">0</strong></span> &nbsp;|&nbsp;
+            <span>High: <strong id="high-count" style="color:#f59e0b">0</strong></span>
+        </div>
+    </div>
+
+    <!-- Right: Drone -->
+    <div class="panel-right">
+        <div class="card">
+            <div class="card-title">Drone Status</div>
+            <div class="card-value" style="font-size:18px" id="drone-status">Standby</div>
+            <div class="card-sub" id="drone-id">JASS-DRONE-01</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Damage Summary</div>
+            <div class="gauge-row"><span class="gauge-label">Total reports</span><span class="gauge-value" id="total-reports">0</span></div>
+            <div class="gauge-row"><span class="gauge-label sev-critical">Critical</span><span class="gauge-value sev-critical" id="sum-critical">0</span></div>
+            <div class="gauge-row"><span class="gauge-label sev-high">High</span><span class="gauge-value sev-high" id="sum-high">0</span></div>
+            <div class="gauge-row"><span class="gauge-label sev-moderate">Moderate</span><span class="gauge-value sev-moderate" id="sum-moderate">0</span></div>
+            <div class="gauge-row"><span class="gauge-label sev-low">Low</span><span class="gauge-value sev-low" id="sum-low">0</span></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Recent Damage Reports</div>
+            <div id="drone-list"><div class="event-item"><span class="event-detail">No reports yet</span></div></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── Config ───────────────────────────────────────────────
+const API_BASE = '/api';
+const POLL_MS = 3000;
+
+// ── Map ──────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: false }).setView([34.765, 32.425], 14);
+L.control.zoom({ position: 'topright' }).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OSM',
+    maxZoom: 19,
+}).addTo(map);
+
+const COLORS = { critical: '#ef4444', high: '#f59e0b', moderate: '#eab308', low: '#22c55e' };
+const RADIUS = { critical: 55, high: 40, moderate: 28, low: 18 };
+const markers = {};
+
+function addMarker(r) {
+    const id = r.event_id || r.id;
+    if (markers[id]) return;
+    const color = COLORS[r.severity] || '#64748b';
+    const circle = L.circle([r.lat, r.lon], {
+        radius: RADIUS[r.severity] || 25,
+        color, fillColor: color, fillOpacity: 0.35, weight: 2,
+    }).addTo(map);
+    circle.bindPopup(`
+        <b style="color:${color}">${(r.severity||'').toUpperCase()}</b><br>
+        ${r.damage_type || 'Damage'}<br>
+        ${r.building || ''}<br><br>
+        <code>${r.lat?.toFixed(5)}, ${r.lon?.toFixed(5)}</code><br>
+        Confidence: ${((r.confidence||0)*100).toFixed(0)}%
+    `);
+    markers[id] = circle;
+}
+
+// ── Fetch ────────────────────────────────────────────────
+async function fetchSensor() {
+    try {
+        const resp = await fetch(`${API_BASE}/sensor_events?order=created_at.desc&limit=10`);
+        if (!resp.ok) return;
+        const rows = await resp.json();
+        if (!rows.length) return;
+
+        const latest = rows[0];
+        const prob = (latest.probability || 0) * 100;
+        const isEq = prob > 50;
+
+        document.getElementById('prob-value').innerHTML = `${prob.toFixed(1)}<span style="font-size:16px;color:#64748b">%</span>`;
+        document.getElementById('pga-value').innerHTML = `${(latest.pga_g||0).toFixed(3)}<span style="font-size:16px;color:#64748b">g</span>`;
+        document.getElementById('ax-value').textContent = (latest.ax||0).toFixed(3);
+        document.getElementById('ay-value').textContent = (latest.ay||0).toFixed(3);
+        document.getElementById('az-value').textContent = (latest.az||0).toFixed(3);
+        document.getElementById('mag-value').textContent = (latest.magnitude_g||0).toFixed(3);
+
+        const badge = document.getElementById('status-badge');
+        if (isEq) {
+            badge.textContent = 'EARTHQUAKE';
+            badge.className = 'badge earthquake';
+        } else {
+            badge.textContent = 'QUIET';
+            badge.className = 'badge quiet';
+        }
+
+        // Event list
+        const list = document.getElementById('eq-list');
+        list.innerHTML = rows.slice(0, 8).map(r => {
+            const t = r.created_at ? new Date(r.created_at).toLocaleTimeString() : '--';
+            const p = ((r.probability||0)*100).toFixed(0);
+            return `<div class="event-item${r.probability > 0.5 ? ' critical' : ''}">
+                <div class="event-title">P=${p}% &nbsp; PGA=${(r.pga_g||0).toFixed(3)}g</div>
+                <div class="event-detail">${t}</div>
+            </div>`;
+        }).join('');
+
+    } catch (e) { console.error('Sensor fetch:', e); }
+}
+
+async function fetchDrone() {
+    try {
+        const resp = await fetch(`${API_BASE}/drone_reports?order=created_at.desc&limit=30`);
+        if (!resp.ok) return;
+        const rows = await resp.json();
+
+        // Summary
+        let total = rows.length, crit = 0, high = 0, mod = 0, low = 0;
+        for (const r of rows) {
+            if (r.severity === 'critical') crit++;
+            else if (r.severity === 'high') high++;
+            else if (r.severity === 'moderate') mod++;
+            else if (r.severity === 'low') low++;
+            addMarker(r);
+        }
+
+        document.getElementById('total-reports').textContent = total;
+        document.getElementById('sum-critical').textContent = crit;
+        document.getElementById('sum-high').textContent = high;
+        document.getElementById('sum-moderate').textContent = mod;
+        document.getElementById('sum-low').textContent = low;
+        document.getElementById('zone-count').textContent = total;
+        document.getElementById('critical-count').textContent = crit;
+        document.getElementById('high-count').textContent = high;
+
+        if (total > 0) {
+            document.getElementById('drone-status').textContent = 'Scanning';
+            document.getElementById('drone-status').style.color = '#f59e0b';
+        }
+
+        // Recent list
+        const list = document.getElementById('drone-list');
+        list.innerHTML = rows.slice(0, 10).map(r => {
+            const t = r.created_at ? new Date(r.created_at).toLocaleTimeString() : '--';
+            return `<div class="event-item ${r.severity||''}">
+                <div class="event-title">${r.damage_type || 'Damage'}</div>
+                <div class="event-detail">${r.building||''} &bull; ${(r.lat||0).toFixed(4)}, ${(r.lon||0).toFixed(4)} &bull; ${t}</div>
+            </div>`;
+        }).join('') || '<div class="event-item"><span class="event-detail">No reports yet</span></div>';
+
+    } catch (e) { console.error('Drone fetch:', e); }
+}
+
+function updateTime() {
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+}
+
+async function poll() {
+    await Promise.all([fetchSensor(), fetchDrone()]);
+    updateTime();
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
