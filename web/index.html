@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JASS Earthquake — Damage Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; }
+
+        #header {
+            background: #161b22;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #30363d;
+        }
+        #header h1 { font-size: 18px; color: #f0f6fc; }
+        #header .status { font-size: 13px; }
+        #header .status .dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+            background: #3fb950;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        #map { height: calc(100vh - 100px); }
+
+        #stats {
+            background: #161b22;
+            padding: 8px 24px;
+            display: flex;
+            gap: 32px;
+            font-size: 13px;
+            border-top: 1px solid #30363d;
+        }
+        #stats span { color: #8b949e; }
+        #stats strong { color: #f0f6fc; }
+
+        .popup-content { font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; line-height: 1.5; }
+        .popup-content .severity { font-weight: bold; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+        .popup-content .severity.critical { background: #da3633; color: white; }
+        .popup-content .severity.high { background: #d29922; color: white; }
+        .popup-content .severity.moderate { background: #e3b341; color: #1c1e21; }
+        .popup-content .severity.low { background: #3fb950; color: white; }
+    </style>
+</head>
+<body>
+
+<div id="header">
+    <h1>JASS Earthquake — Paphos Damage Map</h1>
+    <div class="status"><span class="dot"></span>Live — polling blackboard</div>
+</div>
+
+<div id="map"></div>
+
+<div id="stats">
+    <div><span>Damage zones: </span><strong id="stat-zones">0</strong></div>
+    <div><span>Critical: </span><strong id="stat-critical" style="color:#da3633">0</strong></div>
+    <div><span>High: </span><strong id="stat-high" style="color:#d29922">0</strong></div>
+    <div><span>Last update: </span><strong id="stat-time">—</strong></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const BLACKBOARD_URL = '/api/blackboard';
+const POLL_INTERVAL = 5000; // 5 seconds
+
+// Paphos center
+const map = L.map('map').setView([34.765, 32.418], 14);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+}).addTo(map);
+
+// Marker storage
+const markers = {};
+
+// Severity → color
+const COLORS = {
+    critical: '#da3633',
+    high: '#d29922',
+    moderate: '#e3b341',
+    low: '#3fb950',
+};
+
+const RADIUS = {
+    critical: 60,
+    high: 45,
+    moderate: 30,
+    low: 20,
+};
+
+function createMarker(report) {
+    const color = COLORS[report.severity] || '#8b949e';
+    const radius = RADIUS[report.severity] || 25;
+
+    const circle = L.circle([report.lat, report.lon], {
+        radius: radius,
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.35,
+        weight: 2,
+    }).addTo(map);
+
+    const eid = report.eventId || '—';
+    const popup = `
+        <div class="popup-content">
+            <span class="severity ${report.severity}">${report.severity}</span>
+            <br><br>
+            <strong>${report.damage_type || 'Damage detected'}</strong><br>
+            ${report.building || ''}<br>
+            <br>
+            Coords: ${report.lat.toFixed(5)}, ${report.lon.toFixed(5)}<br>
+            Confidence: ${((report.confidence || 0) * 100).toFixed(0)}%<br>
+            Drone: ${report.drone_id || '—'}<br>
+            Time: ${report.timestamp ? new Date(report.timestamp).toLocaleTimeString() : '—'}<br>
+            <br>
+            <code style="font-size:10px;color:#666;user-select:all">${eid}</code>
+        </div>
+    `;
+    circle.bindPopup(popup);
+
+    return circle;
+}
+
+async function fetchBlackboard() {
+    try {
+        const resp = await fetch(BLACKBOARD_URL, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!resp.ok) {
+            console.error('Blackboard HTTP', resp.status);
+            return;
+        }
+
+        const data = await resp.json();
+        const entries = data.entries || (Array.isArray(data) ? data : []);
+
+        // Find latest dismiss_all timestamp
+        let dismissAllTime = 0;
+        const dismissed = new Set();
+
+        for (const entry of entries) {
+            if (entry.type === 'dismiss_all_zones') {
+                try {
+                    const d = typeof entry.content === 'string' ? JSON.parse(entry.content) : entry.content;
+                    const t = d.timestamp || 0;
+                    if (t > dismissAllTime) dismissAllTime = t;
+                } catch (e) {}
+            }
+            if (entry.type === 'dismiss_zone') {
+                try {
+                    const d = typeof entry.content === 'string' ? JSON.parse(entry.content) : entry.content;
+                    if (d.eventId) dismissed.add(d.eventId);
+                } catch (e) {}
+            }
+        }
+
+        // Remove dismissed markers from map
+        for (const id of dismissed) {
+            if (markers[id]) {
+                map.removeLayer(markers[id]);
+                delete markers[id];
+            }
+        }
+
+        // Collect valid (non-dismissed) damage zones
+        let zones = 0, critical = 0, high = 0;
+        const activeIds = new Set();
+
+        for (const entry of entries) {
+            if (entry.type !== 'damage_zone') continue;
+
+            let report;
+            try {
+                report = typeof entry.content === 'string'
+                    ? JSON.parse(entry.content)
+                    : entry.content;
+            } catch (e) { continue; }
+
+            if (!report.lat || !report.lon) continue;
+
+            const id = report.eventId || `${report.lat}_${report.lon}`;
+
+            // Skip individually dismissed
+            if (dismissed.has(id)) continue;
+
+            // Skip zones posted BEFORE dismiss_all
+            const reportTime = report.timestamp
+                ? new Date(report.timestamp).getTime() / 1000
+                : 0;
+            if (dismissAllTime > 0 && reportTime < dismissAllTime) continue;
+
+            activeIds.add(id);
+
+            if (!markers[id]) {
+                markers[id] = createMarker(report);
+            }
+
+            zones++;
+            if (report.severity === 'critical') critical++;
+            if (report.severity === 'high') high++;
+        }
+
+        // Remove markers that are no longer active
+        for (const [id, m] of Object.entries(markers)) {
+            if (!activeIds.has(id)) {
+                map.removeLayer(m);
+                delete markers[id];
+            }
+        }
+
+        document.getElementById('stat-zones').textContent = zones;
+        document.getElementById('stat-critical').textContent = critical;
+        document.getElementById('stat-high').textContent = high;
+        document.getElementById('stat-time').textContent = new Date().toLocaleTimeString();
+
+    } catch (e) {
+        console.error('Blackboard fetch error:', e);
+    }
+}
+
+// Initial fetch + poll
+fetchBlackboard();
+setInterval(fetchBlackboard, POLL_INTERVAL);
+</script>
+
+</body>
+</html>
