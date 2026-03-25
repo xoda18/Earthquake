@@ -55,7 +55,7 @@ def make_windows(data_3xN, label):
 
 
 def generate_dataset():
-    """Generate synthetic earthquake + noise dataset in g-units."""
+    """Generate synthetic earthquake + noise datasets_for_trainings in g-units."""
     gen = IndependentEarthquakeGenerator(
         sampling_rate=SAMPLE_RATE,
         duration_sec=DURATION_SEC
