@@ -1,19 +1,12 @@
 """
 supabase_client.py
 Shared Supabase REST client — used by sensor, drone, and swarm tools.
-
-Uses plain requests (no extra dependencies).
-
-Requires environment variables:
-    SUPABASE_URL  — e.g. https://xxxx.supabase.co
-    SUPABASE_KEY  — anon or service_role key
 """
 
-import os
 import requests
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
+SUPABASE_KEY = "YOUR_SUPABASE_SERVICE_KEY"
 
 _HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -24,9 +17,6 @@ _HEADERS = {
 
 
 def _check_config():
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("WARNING: SUPABASE_URL or SUPABASE_KEY not set. Export them first.")
-        return False
     return True
 
 
