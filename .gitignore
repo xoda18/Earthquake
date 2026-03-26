@@ -216,10 +216,12 @@ detection/sensor_log.jsonl
 drone/drone_log.jsonl
 *.hdf5
 
-# Image diff outputs and backups
-crack_detection/image_diff/output_backup/
-crack_detection/image_diff/output/
-crack_detection/image_diff/input/
+# Image diff outputs and backups (keep dirs via .gitkeep)
+crack_detection/image_diff/output_backup/*
+crack_detection/image_diff/output/*
+crack_detection/image_diff/input/*
+!crack_detection/image_diff/*/.gitkeep
+!crack_detection/image_diff/*/*/.gitkeep
 
 # Images
 *.png
