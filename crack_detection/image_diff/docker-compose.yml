@@ -4,6 +4,7 @@ services:
     volumes:
       - ./input:/app/input
       - ./output:/app/output
+      - ./output_resized:/app/output_resized
       - ./output_backup:/app/output_backup
     entrypoint: ["python", "detect.py"]
     command: []

@@ -5,100 +5,212 @@ Compares before/after photos of a building surface using AprilTag-based alignmen
 ## How it works
 
 1. Detects AprilTags in both images for alignment
-2. Computes homography to warp the "after" image into the "before" coordinate space
+2. Warps **both** images to a canonical coordinate frame (tag-distance-based) so interpolation artifacts are symmetric and cancel out
 3. Refines alignment to sub-pixel accuracy using ECC (Enhanced Correlation Coefficient)
-4. Computes difference using one of four methods
-5. Thresholds + filters the diff into change regions
-6. Overlays yellow highlights on detected changes
+4. Matches illumination (LAB histogram matching)
+5. Computes difference using one of seven methods
+6. Filters by area and shape (solidity), optionally expands to full object boundaries
+7. Overlays yellow highlights on detected changes
 
-## Alignment pipeline
+## Project structure
 
-The alignment works in two stages:
-
-**Stage 1 — AprilTag homography:** Finds known AprilTag markers in both images and computes a perspective transform (homography) that maps the "after" image onto the "before" image. This gets alignment to within a few pixels, but not perfect — small errors cause false change detections across the whole image.
-
-**Stage 2 — ECC refinement (on by default):** Takes the rough homography from stage 1 and iteratively adjusts it to maximize pixel-level correlation between the two images. This achieves sub-pixel alignment accuracy, eliminating the scattered false detections caused by tiny shifts. Disable with `--no-ecc` if tags are highly accurate or ECC fails to converge.
+```
+crack_detection/image_diff/
+├── detect.py              # CLI entry point + orchestration
+├── pipeline/
+│   ├── preprocessing.py   # AprilTag detection, canonical frame, histogram matching
+│   ├── alignment.py       # Homography, ECC refinement, overlap cropping
+│   ├── diff_methods.py    # All 7 diff algorithms + masks
+│   ├── postprocessing.py  # Morphology, heatmap, annotation, fill modes
+│   └── io.py              # File I/O, backup, debug panels
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
+```
 
 ## Diff methods
 
-Four methods are available for computing the difference between aligned images. Each has different strengths:
-
 ### `gradient` (default)
-Computes Sobel edge gradients on both images and compares their magnitudes. Since edges are defined by relative pixel differences (not absolute brightness), this method is robust to global lighting changes. Best for: outdoor scenes where light varies between shots but structure is what matters.
+Sobel edge gradient magnitude difference. Robust to global lighting changes. Best for outdoor scenes.
 
-### `ssim` (recommended for noisy conditions)
-**SSIM (Structural Similarity Index)** compares images using local 11×11 patches rather than individual pixels. For each patch it considers three things: luminance (brightness), contrast (variance), and structure (correlation pattern). The key advantage: if a pixel shifts by 1–2px due to imperfect alignment, the surrounding patch still looks nearly identical, so SSIM won't flag it as a change. Only actual structural differences (a crack appearing, an object moved) produce high SSIM diff scores. Best for: real-world conditions where perfect pixel alignment is hard to achieve.
+### `edge_xor`
+Canny edges of both images are dilated (tolerance for sub-pixel error), then XOR'd. Unchanged objects cancel out — only truly new/removed objects produce orphan edges. **Best for detecting moved/added/removed objects with zero false positives on static edges.**
+
+### `lab`
+Chrominance-only difference in LAB color space (A+B channels). Ignores lightness (L), so shadows, exposure changes, and lighting shifts are filtered out. **Best when lighting varies between shots.**
+
+### `combined`
+Runs both `edge_xor` and `lab`, combines results with `--combine-mode or` (union, default) or `--combine-mode and` (intersection, stricter).
+
+### `ssim`
+SSIM (Structural Similarity Index) — compares local 11x11 patches. Tolerant to 1-2px alignment error. Best for noisy conditions.
 
 ### `local_norm`
-Divides the image into tiles and normalizes each tile's brightness independently before comparing. This handles uneven lighting across the surface (e.g. one corner in shadow, the other in sun). Best for: surfaces with patchy lighting or partial shade.
+Tile-based local brightness normalisation. Handles uneven lighting (patchy shade).
 
 ### `raw`
-Direct pixel intensity difference. Simple and fast, but sensitive to any lighting change between shots. Best for: controlled indoor environments with fixed lighting.
+Direct pixel intensity difference. Simple, fast, sensitive. Best for controlled indoor environments.
 
 ### `all`
-Runs all four methods and uses `gradient` as the primary output. Useful for comparing which method works best for your specific scene — check the debug panel.
+Runs all methods and saves a side-by-side comparison panel.
 
-## Running
+## Quick start
 
 ```bash
 cd crack_detection/image_diff
 
-# Default run (gradient + ECC refinement)
-docker compose run --rm crack-detector
+# Build the Docker image
+docker compose build
 
-# SSIM method (best for noisy/imperfect alignment)
-docker compose run --rm crack-detector --method ssim
-
-# Compare all methods side by side
-docker compose run --rm crack-detector --method all
-
-# Custom parameters
-docker compose run --rm crack-detector --sensitivity 0.2 --method ssim --min-area 3000 --no-backup
+# Place images in input/ as before-<date>.jpg and after-<date>.jpg
+# e.g. before-25-03-26.jpg, after-25-03-26.jpg
 ```
 
-Place image pairs in `input/` as `before-<date>.jpg` and `after-<date>.jpg` (e.g. `before-25-03-26.jpg`).
+## Running — recommended scenarios
 
-Results go to `output/`, backups to `output_backup/`.
+### Best overall detection (start here)
 
-## Key parameters
+```bash
+docker compose run --rm crack-detector \
+  --method combined \
+  --fill-mode convex \
+  --min-solidity 0.3
+```
 
+This runs edge XOR + LAB color diff combined, fills partial detections with convex hulls (so moved objects are fully highlighted), and rejects thin-line false positives (laptop borders, wires).
+
+### If objects are only partially highlighted
+
+The convex hull might not be enough for complex shapes. Try flood-fill which follows actual object boundaries:
+
+```bash
+docker compose run --rm crack-detector \
+  --method combined \
+  --fill-mode flood \
+  --min-solidity 0.3
+```
+
+### If too many false positives remain
+
+Increase sensitivity threshold and solidity filter:
+
+```bash
+docker compose run --rm crack-detector \
+  --method edge_xor \
+  --fill-mode convex \
+  --min-solidity 0.4 \
+  --sensitivity 0.4 \
+  --min-area 8000
+```
+
+`edge_xor` alone is the cleanest method — it ignores static edges entirely. Bump `--min-solidity` to reject more thin shapes.
+
+### If real changes are being missed
+
+Lower thresholds and use the most sensitive method:
+
+```bash
+docker compose run --rm crack-detector \
+  --method raw \
+  --fill-mode convex \
+  --sensitivity 0.15 \
+  --min-area 2000 \
+  --min-solidity 0.2
+```
+
+### Compare all methods side by side
+
+```bash
+docker compose run --rm crack-detector --method all --fill-mode convex --min-solidity 0.3
+```
+
+Outputs a comparison panel image with all 7 methods. Check which one works best for your scene.
+
+### Legacy mode (old behavior, no canonical frame)
+
+```bash
+docker compose run --rm crack-detector --method gradient --no-canonical --fill-mode none
+```
+
+### Process a specific image pair only
+
+```bash
+docker compose run --rm crack-detector --pair 25-03-26 --method combined --fill-mode convex --min-solidity 0.3
+```
+
+## All parameters
+
+### Core
 | Parameter | Default | Description |
 |---|---|---|
-| `--sensitivity` | `0.30` | Change threshold 0–1. Lower = more sensitive |
-| `--min-area` | `5000` | Minimum region size in px². Filters out noise |
-| `--method` | `gradient` | `gradient`, `local_norm`, `raw`, `ssim`, or `all` |
-| `--no-ecc` | off | Skip ECC sub-pixel alignment refinement |
-| `--ecc-iterations` | `200` | Max iterations for ECC convergence |
-| `--alpha` | `0.4` | Heatmap opacity (0 = transparent, 1 = solid) |
-| `--blur` | `5` | Gaussian blur kernel size |
+| `--method` | `gradient` | `gradient`, `edge_xor`, `lab`, `combined`, `ssim`, `local_norm`, `raw`, `all` |
+| `--sensitivity` | `0.30` | Change threshold 0-1. Lower = more sensitive |
+| `--min-area` | `5000` | Minimum region size in px2. Filters noise |
 | `--pair` | all | Process only one date, e.g. `25-03-26` |
-| `--no-debug` | off | Skip 3-panel debug image |
-| `--no-backup` | off | Skip backup copy |
-| `--tag-family` | `tag25h9` | AprilTag family |
-| `--tag-ids` | `0 1` | Expected tag IDs in scene |
+
+### Shape filtering & fill
+| Parameter | Default | Description |
+|---|---|---|
+| `--fill-mode` | `none` | `none` = raw blobs, `convex` = convex hull of nearby blobs, `flood` = edge-bounded flood-fill |
+| `--min-solidity` | `0.0` | Reject contours with solidity below this (0-1). Thin lines ~0.1-0.2, objects ~0.4+. 0 = off |
+
+### Alignment
+| Parameter | Default | Description |
+|---|---|---|
+| `--no-canonical` | off | Skip canonical frame (legacy warp-after-only mode) |
+| `--no-ecc` | off | Skip ECC sub-pixel refinement |
+| `--ecc-iterations` | `200` | Max ECC iterations |
+| `--ecc-epsilon` | `1e-6` | ECC convergence threshold |
 | `--homography-method` | `ransac` | `ransac`, `lmeds`, or `rho` |
 | `--ransac-thresh` | `5.0` | RANSAC reprojection threshold (px) |
 
-## Tuning detection
+### Combined method
+| Parameter | Default | Description |
+|---|---|---|
+| `--combine-mode` | `or` | `or` = union (either method), `and` = intersection (both agree) |
+| `--edge-xor-dilate` | `5` | Edge XOR dilation radius in px |
+| `--canny-low` | `50` | Canny low threshold |
+| `--canny-high` | `150` | Canny high threshold |
 
-**Too many false positives (noise, shadows, minor shifts):**
-- Switch to `--method ssim` — naturally ignores small pixel shifts
-- Increase `--sensitivity` (e.g. 0.4–0.5)
-- Increase `--min-area` (e.g. 10000) to filter small blobs
-- Make sure ECC is enabled (don't use `--no-ecc`)
+### Output
+| Parameter | Default | Description |
+|---|---|---|
+| `--alpha` | `0.4` | Heatmap opacity (0=transparent, 1=solid) |
+| `--no-debug` | off | Skip 3-panel debug image |
+| `--no-annotate` | off | Skip legend, bounding boxes, tag markers |
+| `--no-backup` | off | Skip backup copy to output_backup/ |
 
-**Missing real changes:**
-- Decrease `--sensitivity` (e.g. 0.1–0.2)
-- Decrease `--min-area` (e.g. 1000) to keep smaller regions
-- Try `--method all` to compare which method captures the change best
+### AprilTags
+| Parameter | Default | Description |
+|---|---|---|
+| `--tag-family` | `tag25h9` | AprilTag family string |
+| `--tag-ids` | `0 1` | Expected tag IDs in scene |
+| `--edge-suppress` | `7` | Suppress diff within N px of edges (0=off) |
+
+## Tuning guide
+
+| Problem | Fix |
+|---|---|
+| Thin lines highlighted (wires, borders) | Add `--min-solidity 0.3` (or higher) |
+| Object only partially highlighted | Add `--fill-mode convex` or `--fill-mode flood` |
+| Too many false positives overall | Switch to `--method edge_xor`, increase `--sensitivity` |
+| Lighting changes cause false diffs | Use `--method lab` or `--method combined` |
+| Missing real changes | Lower `--sensitivity 0.15`, lower `--min-area 2000` |
+| Images from very different angles | Make sure both AprilTags are visible, use `--no-canonical` if alignment fails |
 
 ## Severity scale
-
-Based on percentage of changed pixels:
 
 | Changed area | Severity |
 |---|---|
 | < 1% | None |
-| 1–8% | Low |
-| 8–25% | Moderate |
+| 1-8% | Low |
+| 8-25% | Moderate |
 | > 25% | High |
+
+## Input format
+
+Place image pairs in `input/` as `before-<date>.<ext>` and `after-<date>.<ext>`.
+
+Supported extensions: `.jpg`, `.jpeg`, `.tif`, `.tiff`
+
+Results go to `output/`, backups to `output_backup/`.
