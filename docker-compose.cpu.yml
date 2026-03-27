@@ -1,0 +1,75 @@
+# ==========================================================================
+# CPU-only variant for testing VLM without nvidia-container-runtime
+# Use with: docker compose -f docker-compose.cpu.yml up vlm-analyzer
+#
+# Once nvidia-container-runtime is installed, use:
+#   docker compose up vlm-analyzer
+# ==========================================================================
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    ports:
+      - "5050:5050"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+      VLM_URL: "http://vlm-analyzer:5060"
+      IMAGE_CROP_INPUT: "${PWD}/crack_detection/image_diff/input"
+      IMAGE_CROP_OUTPUT: "${PWD}/crack_detection/image_diff/output_cropped"
+    depends_on:
+      - vlm-analyzer
+    restart: unless-stopped
+
+  vlm-analyzer:
+    build:
+      context: .
+      dockerfile: vlm/Dockerfile
+    ports:
+      - "5060:5060"
+    volumes:
+      - ./crack_detection/image_diff/output_cropped:/app/input
+    environment:
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+      MODEL_ID: "${MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
+      QUANTIZE: "false"
+      SUPABASE_URL: "https://YOUR_PROJECT.supabase.co"
+      SUPABASE_KEY: "YOUR_SUPABASE_SERVICE_KEY"
+      ALERT_URL: "https://blackboard.jass.school/blackboard"
+      STORAGE_BUCKET: "crack-images"
+    # Note: No GPU resources allocated - will use CPU
+    restart: unless-stopped
+
+  drone-scanner:
+    build:
+      context: .
+      dockerfile: DJIControlClient/Dockerfile
+    network_mode: host
+    environment:
+      ORCHESTRATOR_URL: "http://localhost:5050"
+    profiles:
+      - pipeline
+
+  image-cropper:
+    build:
+      context: .
+      dockerfile: crack_detection/image_diff/Dockerfile.crop
+    volumes:
+      - ./crack_detection/image_diff/input:/app/input
+      - ./crack_detection/image_diff/output_cropped:/app/output
+    environment:
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    profiles:
+      - pipeline
+
+  db-cleanup:
+    build:
+      context: .
+      dockerfile: db_cleanup/Dockerfile
+    environment:
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    profiles:
+      - pipeline

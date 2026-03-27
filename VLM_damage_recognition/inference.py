@@ -35,21 +35,12 @@ class LLaVAInference:
         # Load processor
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
 
-        # Load model with quantization if on CPU
-        if self.quantize:
-            self.model = LlavaForConditionalGeneration.from_pretrained(
-                model_id,
-                load_in_8bit=True,
-                device_map="auto",
-                trust_remote_code=True,
-            )
-        else:
-            self.model = LlavaForConditionalGeneration.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                device_map="auto",
-                trust_remote_code=True,
-            )
+        # Load model (quantization via load_in_8bit is deprecated, use normal loading)
+        self.model = LlavaForConditionalGeneration.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+            trust_remote_code=True,
+        )
 
         self.model.eval()
         print("[LLaVA] Model loaded successfully")

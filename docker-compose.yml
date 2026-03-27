@@ -54,11 +54,18 @@ services:
     environment:
       ORCHESTRATOR_URL: "http://orchestrator:5050"
       MODEL_ID: "${MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
-      QUANTIZE: "true"
+      QUANTIZE: "false"
       SUPABASE_URL: "https://YOUR_PROJECT.supabase.co"
       SUPABASE_KEY: "YOUR_SUPABASE_SERVICE_KEY"
       ALERT_URL: "https://blackboard.jass.school/blackboard"
       STORAGE_BUCKET: "crack-images"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
   # ------------------------------------------------------------------

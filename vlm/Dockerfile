@@ -7,10 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install VLM dependencies (LLaVA + FastAPI)
+# GPU PyTorch (CUDA 12.1) installed first for fast inference
 COPY VLM_damage_recognition/requirements.txt /tmp/vlm_requirements.txt
-RUN pip install --no-cache-dir \
-    -r /tmp/vlm_requirements.txt \
-    fastapi uvicorn[standard] python-multipart accelerate bitsandbytes
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 torch==2.4.1 && \
+    pip install --no-cache-dir -r /tmp/vlm_requirements.txt fastapi uvicorn[standard] python-multipart
 
 # Copy VLM damage recognition module
 COPY VLM_damage_recognition/ /app/VLM_damage_recognition/
