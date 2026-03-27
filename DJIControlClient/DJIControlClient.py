@@ -1,8 +1,7 @@
 from typing import Any, Dict, List, Union
 import requests
 from enum import Enum
-import time
-
+import time 
 
 class VelocityProfile(Enum):
     CONSTANT = 1
@@ -16,7 +15,6 @@ class ControlMode(Enum):
 
 
 class DJIControlClient:
-
     def __init__(self, ip: str, port: int) -> None:
 
         self.ip = ip
@@ -34,35 +32,38 @@ class DJIControlClient:
 
     # Take off and Land
     def takeOff(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/takeoff')
+        return self.makeReqAndReturnJSON("/takeoff")
 
     def land(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/land')
+        return self.makeReqAndReturnJSON("/land")
 
     def confirmLanding(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/confirmLanding')
+        return self.makeReqAndReturnJSON("/confirmLanding")
 
     # Landing Protection
 
     def getLandingProtectionState(self) -> Union[bool, Dict[str, Any]]:
         landingProtectionState = self.makeReqAndReturnJSON(
-            '/isLandingProtectionEnabled')
-        if 'state' in landingProtectionState:
-            return landingProtectionState['state']
+            "/isLandingProtectionEnabled"
+        )
+        if "state" in landingProtectionState:
+            return landingProtectionState["state"]
         else:
             return landingProtectionState
 
     def setLandingProtectionState(self, enabled: bool) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/enableLandingProtection' if enabled else '/disableLandingProtection')
+        return self.makeReqAndReturnJSON(
+            "/enableLandingProtection" if enabled else "/disableLandingProtection"
+        )
 
     # Velocity Profiles
     def getVelocityProfile(self) -> VelocityProfile:
-        profileName = self.makeReqAndReturnJSON('/getVelocityProfile')
+        profileName = self.makeReqAndReturnJSON("/getVelocityProfile")
 
-        if 'state' in profileName:
-            if profileName == 'CONSTANT':
+        if "state" in profileName:
+            if profileName == "CONSTANT":
                 return VelocityProfile.CONSTANT
-            elif profileName == 'TRAPEZOIDAL':
+            elif profileName == "TRAPEZOIDAL":
                 return VelocityProfile.TRAPEZOIDAL
             else:
                 return VelocityProfile.S_CURVE
@@ -71,22 +72,21 @@ class DJIControlClient:
 
     def setVelocityProfile(self, profile: VelocityProfile) -> Dict[str, Any]:
         if profile == VelocityProfile.CONSTANT:
-            profileName = 'CONSTANT'
+            profileName = "CONSTANT"
         elif profile == VelocityProfile.TRAPEZOIDAL:
-            profileName = 'TRAPEZOIDAL'
+            profileName = "TRAPEZOIDAL"
         elif profile == VelocityProfile.S_CURVE:
-            profileName = 'S_CURVE'
+            profileName = "S_CURVE"
         else:
-            raise AssertionError(
-                "Given profile isn't a valid Velocity Profile")
-        return self.makeReqAndReturnJSON(f'/setVelocityProfile/{profileName}')
+            raise AssertionError("Given profile isn't a valid Velocity Profile")
+        return self.makeReqAndReturnJSON(f"/setVelocityProfile/{profileName}")
 
     # Control Mode
     def getControlMode(self) -> ControlMode:
-        modeName = self.makeReqAndReturnJSON('/getControlMode')
+        modeName = self.makeReqAndReturnJSON("/getControlMode")
 
-        if 'state' in modeName:
-            if modeName['state'] == 'POSITION':
+        if "state" in modeName:
+            if modeName["state"] == "POSITION":
                 return ControlMode.POSITION
             else:
                 return ControlMode.VELOCITY
@@ -101,144 +101,171 @@ class DJIControlClient:
         else:
             raise AssertionError("Given mode isn't a valid Control Mode")
 
-        return self.makeReqAndReturnJSON(f'/setControlMode/{modeName}')
+        return self.makeReqAndReturnJSON(f"/setControlMode/{modeName}")
 
     # Movement Speed
 
     def getMaxSpeed(self) -> Union[float, Dict[str, Any]]:
-        movementSpeed = self.makeReqAndReturnJSON('/getMaxSpeed')
+        movementSpeed = self.makeReqAndReturnJSON("/getMaxSpeed")
 
-        if 'state' in movementSpeed:
-            return movementSpeed['state']
+        if "state" in movementSpeed:
+            return movementSpeed["state"]
         else:
             return movementSpeed
 
     def setMaxSpeed(self, speed: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/setMaxSpeed/{speed}')
+        return self.makeReqAndReturnJSON(f"/setMaxSpeed/{speed}")
 
     def getMaxAngularSpeed(self) -> Union[float, Dict[str, Any]]:
-        movementSpeed = self.makeReqAndReturnJSON('/getMaxAngularSpeed')
+        movementSpeed = self.makeReqAndReturnJSON("/getMaxAngularSpeed")
 
-        if 'state' in movementSpeed:
-            return movementSpeed['state']
+        if "state" in movementSpeed:
+            return movementSpeed["state"]
         else:
             return movementSpeed
 
     def setMaxAngularSpeed(self, speed: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/setMaxAngularSpeed/{speed}')
+        return self.makeReqAndReturnJSON(f"/setMaxAngularSpeed/{speed}")
 
     # Velocity Control
     def startVelocityControl(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/startVelocityControl')
+        return self.makeReqAndReturnJSON("/startVelocityControl")
 
-    def setVelocityCommand(self, xVel: float, yVel: float, zVel: float, yawRate: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/setVelocityCommand/{xVel}/{yVel}/{zVel}/{yawRate}')
+    def setVelocityCommand(
+        self, xVel: float, yVel: float, zVel: float, yawRate: float
+    ) -> Dict[str, Any]:
+        return self.makeReqAndReturnJSON(
+            f"/setVelocityCommand/{xVel}/{yVel}/{zVel}/{yawRate}"
+        )
 
     def stopVelocityControl(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/stopVelocityControl')
+        return self.makeReqAndReturnJSON("/stopVelocityControl")
 
     def getCurrentVelocityCommand(self) -> Dict[str, Any]:
-        velocityCommand = self.makeReqAndReturnJSON(
-            '/getCurrentVelocityCommand')
+        velocityCommand = self.makeReqAndReturnJSON("/getCurrentVelocityCommand")
 
-        if 'state' in velocityCommand:
-            return velocityCommand['state']
+        if "state" in velocityCommand:
+            return velocityCommand["state"]
         else:
             return velocityCommand
 
     # Positon Control
     # Vertical Movement
     def moveUp(self, distance: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/moveUp/{distance}')
+        return self.makeReqAndReturnJSON(f"/moveUp/{distance}")
 
     def moveDown(self, distance: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/moveDown/{distance}')
+        return self.makeReqAndReturnJSON(f"/moveDown/{distance}")
 
     # Rotational Movement
     def rotateClockwise(self, angle: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/rotateClockwise/{angle}')
+        return self.makeReqAndReturnJSON(f"/rotateClockwise/{angle}")
 
     def rotateCounterClockwise(self, angle: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/rotateCounterClockwise/{angle}')
+        return self.makeReqAndReturnJSON(f"/rotateCounterClockwise/{angle}")
 
     # Planar Movement
     def moveForward(self, distance: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/moveForward/{distance}')
+        return self.makeReqAndReturnJSON(f"/moveForward/{distance}")
 
     def moveBackward(self, distance: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/moveBackward/{distance}')
+        return self.makeReqAndReturnJSON(f"/moveBackward/{distance}")
 
     def moveLeft(self, distance: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/moveLeft/{distance}')
+        return self.makeReqAndReturnJSON(f"/moveLeft/{distance}")
 
     def moveRight(self, distance: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/moveRight/{distance}')
+        return self.makeReqAndReturnJSON(f"/moveRight/{distance}")
 
     # IMU State
     def startCollectingIMUState(self, interval: int) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/startCollectingIMUState/{interval}')
+        return self.makeReqAndReturnJSON(f"/startCollectingIMUState/{interval}")
 
     def stopCollectingIMUState(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/stopCollectingIMUState')
+        return self.makeReqAndReturnJSON(f"/stopCollectingIMUState")
 
     def getCurrentIMUState(self) -> Dict[str, Any]:
-        imuState = self.makeReqAndReturnJSON('/getCurrentIMUState')
-        if 'state' in imuState:
-            return imuState['state']
+        imuState = self.makeReqAndReturnJSON("/getCurrentIMUState")
+        if "state" in imuState:
+            return imuState["state"]
         else:
             return imuState
 
     def getCollectedIMUStates(self) -> Union[List[Dict[str, float]], Dict[str, Any]]:
-        imuStates = self.makeReqAndReturnJSON('/getCollectedIMUStates')
-        if 'state' in imuStates:
-            return imuStates['state']
+        imuStates = self.makeReqAndReturnJSON("/getCollectedIMUStates")
+        if "state" in imuStates:
+            return imuStates["state"]
         else:
             return imuStates
 
     def clearCollectedIMUStates(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/clearCollectedIMUStates')
+        return self.makeReqAndReturnJSON("/clearCollectedIMUStates")
 
     # Heading
 
     def getHeading(self) -> Dict[str, Any]:
-        heading = self.makeReqAndReturnJSON('/getHeading')
-        if 'state' in heading:
-            return heading['state']
+        heading = self.makeReqAndReturnJSON("/getHeading")
+        if "state" in heading:
+            return heading["state"]
         else:
             return heading
 
     # Altitude
     def getAltitude(self) -> Dict[str, Any]:
-        altitude = self.makeReqAndReturnJSON('/getAltitude')
-        if 'state' in altitude:
-            return altitude['state']
+        altitude = self.makeReqAndReturnJSON("/getAltitude")
+        if "state" in altitude:
+            return altitude["state"]
         else:
             return altitude
 
     # Camera Actions
 
     def captureShot(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/captureShot')
+        return self.makeReqAndReturnJSON("/captureShot")
 
     def startVideoRecording(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/startVideoRecording')
+        return self.makeReqAndReturnJSON("/startVideoRecording")
 
     def stopVideoRecording(self) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON('/stopVideoRecording')
+        return self.makeReqAndReturnJSON("/stopVideoRecording")
 
     def pitchGimbal(self, angle: float) -> Dict[str, Any]:
-        return self.makeReqAndReturnJSON(f'/pitchGimbal/{angle}')
+        return self.makeReqAndReturnJSON(f"/pitchGimbal/{angle}")
 
     def fetchPreviewFromIndex(self, index: int) -> Dict[str, Any]:
-        preview = self.makeReqAndReturnJSON(f'/fetchPreviewFromIndex/{index}')
-        if 'state' in preview:
-            return preview['state']
+        preview = self.makeReqAndReturnJSON(f"/fetchPreviewFromIndex/{index}")
+        if "state" in preview:
+            return preview["state"]
         else:
             return preview
 
+    def takeImage(self, filename: str = "drone.jpg") -> str:
+        url = f"{self.server_addr}/takeImage"
 
+        r = requests.get(url=url, stream=True)
 
+        # Check HTTP status
+        if r.status_code != 200:
+            raise Exception(f"Request failed with status code {r.status_code}")
 
+        # Check content type (important!)
+        content_type = r.headers.get("Content-Type", "")
+        if "image/jpeg" not in content_type:
+            # Try to decode error JSON if server sent one
+            try:
+                return r.json()
+            except Exception:
+                raise Exception("Unexpected response (not JPEG and not JSON)")
+
+        # Save image synchronously
+        with open(filename, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        return filename
+    
+    
 # connect to the streen 
 # extract the frame 
 # save it (in file)
@@ -247,19 +274,21 @@ class DJIControlClient:
 
 
 
-client = DJIControlClient("192.168.1.119", 8080)
+# client = DJIControlClient("192.168.1.130", 8080)
+# client.takeImage()
 
-client.takeOff()
-time.sleep(5)
-client.moveForward(1)
-client.rotateClockwise(90)
-client.moveForward(0.5)
-client.rotateClockwise(90)
-client.moveForward(0.5)
-client.rotateClockwise(90)
-client.moveForward(0.5)
-client.rotateClockwise(90)
-client.moveForward(0.5)
-client.land()
-time.sleep(5)
-client.confirmLanding()
+
+# client.takeOff()
+# time.sleep(5)
+# client.moveForward(1)
+# client.rotateClockwise(90)
+# client.moveForward(0.5)
+# client.rotateClockwise(90)
+# client.moveForward(0.5)
+# client.rotateClockwise(90)
+# client.moveForward(0.5)
+# client.rotateClockwise(90)
+# client.moveForward(0.5)
+# client.land()
+# time.sleep(5)
+# client.confirmLanding()
