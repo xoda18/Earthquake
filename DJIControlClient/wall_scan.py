@@ -47,7 +47,7 @@ def send_to_vlm(image_path, run_id=""):
                 f"{VLM_URL}/analyze",
                 files={"image": (filename, f, "image/jpeg")},
                 params={"run_id": run_id},
-                timeout=120,
+                timeout=600,
             )
         if resp.status_code == 200:
             result = resp.json()
