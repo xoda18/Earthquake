@@ -1,108 +1,18 @@
-# ==========================================================================
-# Earthquake Intelligence System — Pipeline Orchestrator
-#
-# Pipeline:
-#   earthquake detector (runs separately with hardware) →
-#   drone-scanner → image-cropper → vlm-analyzer → db-cleanup
-#
-# Usage:
-#   docker compose build
-#   docker compose up orchestrator vlm-analyzer -d
-#
-#   # Trigger pipeline manually (e.g. from UI "Launch Drone" button):
-#   curl -X POST http://localhost:5050/pipeline/trigger \
-#        -H "Content-Type: application/json" \
-#        -d '{"step": "drone_scan"}'
-#
-# Earthquake detection runs outside Docker (hardware + UI + sensor).
-# It POSTs to http://localhost:5050/step/done when a quake is detected.
-# ==========================================================================
+version: "3.8"
 
 services:
-  # ------------------------------------------------------------------
-  # Orchestrator — receives step completions, launches next containers
-  # ------------------------------------------------------------------
-  orchestrator:
+  dashboard:
     build:
       context: .
-      dockerfile: orchestrator/Dockerfile
+      dockerfile: Dockerfile.dashboard
     ports:
-      - "5050:5050"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      ORCHESTRATOR_URL: "http://orchestrator:5050"
-      VLM_URL: "http://vlm-analyzer:5060"
-      IMAGE_CROP_INPUT: "${PWD}/crack_detection/image_diff/input"
-      IMAGE_CROP_OUTPUT: "${PWD}/crack_detection/image_diff/output_cropped"
-    depends_on:
-      - vlm-analyzer
+      - "8080:8080"
     restart: unless-stopped
 
-  # ------------------------------------------------------------------
-  # VLM Analyzer — always-running API server for crack analysis
-  # Receives images, analyzes with VLM, saves to Supabase, compares runs
-  # ------------------------------------------------------------------
-  vlm-analyzer:
+  drone-mock:
     build:
       context: .
-      dockerfile: vlm/Dockerfile
-    ports:
-      - "5060:5060"
-    volumes:
-      - ./crack_detection/image_diff/output_cropped:/app/input
-    environment:
-      ORCHESTRATOR_URL: "http://orchestrator:5050"
-      MODEL_ID: "${MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
-      QUANTIZE: "true"
-      SUPABASE_URL: "https://YOUR_PROJECT.supabase.co"
-      SUPABASE_KEY: "YOUR_SUPABASE_SERVICE_KEY"
-      ALERT_URL: "https://blackboard.jass.school/blackboard"
-      STORAGE_BUCKET: "crack-images"
+      dockerfile: Dockerfile.drone
     restart: unless-stopped
-
-  # ------------------------------------------------------------------
-  # Earthquake Detector runs OUTSIDE Docker (hardware + UI + sensor).
-  # Start it separately:  python detection/realtime_visualizer.py
-  # It POSTs to http://localhost:5050/step/done when a quake is detected.
-  # ------------------------------------------------------------------
-
-  # ------------------------------------------------------------------
-  # Step 1: Drone Scanner — captures wall photos via DJI
-  # ------------------------------------------------------------------
-  drone-scanner:
-    build:
-      context: .
-      dockerfile: DJIControlClient/Dockerfile
-    network_mode: host
-    environment:
-      ORCHESTRATOR_URL: "http://localhost:5050"
     profiles:
-      - pipeline
-
-  # ------------------------------------------------------------------
-  # Step 2: Image Cropper — crops images to AprilTag region (no diff)
-  # ------------------------------------------------------------------
-  image-cropper:
-    build:
-      context: .
-      dockerfile: crack_detection/image_diff/Dockerfile.crop
-    volumes:
-      - ./crack_detection/image_diff/input:/app/input
-      - ./crack_detection/image_diff/output_cropped:/app/output
-    environment:
-      ORCHESTRATOR_URL: "http://orchestrator:5050"
-    profiles:
-      - pipeline
-
-  # ------------------------------------------------------------------
-  # Step 4: DB Cleanup — removes old data, keeps 2 versions (runs last)
-  # ------------------------------------------------------------------
-  db-cleanup:
-    build:
-      context: .
-      dockerfile: db_cleanup/Dockerfile
-    environment:
-      ORCHESTRATOR_URL: "http://orchestrator:5050"
-    profiles:
-      - pipeline
+      - demo  # only runs with: docker compose --profile demo up

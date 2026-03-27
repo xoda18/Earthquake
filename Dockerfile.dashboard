@@ -1,0 +1,8 @@
+FROM python:3.13-slim
+WORKDIR /app
+RUN pip install --no-cache-dir requests
+COPY supabase_client.py .
+COPY web/server.py web/index.html ./web/
+WORKDIR /app/web
+EXPOSE 8080
+CMD ["python", "server.py"]
