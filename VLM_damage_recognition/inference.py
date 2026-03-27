@@ -38,12 +38,16 @@ class LLaVAInference:
 
         # Load model — strategy depends on device
         if self.quantize:
-            # CUDA only: 8-bit quantization via bitsandbytes (fits 7B model in 8GB VRAM)
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+            # CUDA only: 4-bit NF4 quantization — uses ~4GB VRAM, ideal for 8GB cards
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16,
+            )
             self.model = LlavaForConditionalGeneration.from_pretrained(
                 model_id,
                 quantization_config=bnb_config,
-                device_map="auto",
+                device_map="cuda:0",
                 trust_remote_code=True,
             )
         elif self.device == "cuda":

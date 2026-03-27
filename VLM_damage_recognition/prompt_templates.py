@@ -11,6 +11,24 @@ class DamagePrompts:
     """Collection of prompts for damage analysis."""
 
     @staticmethod
+    def has_damage_screening() -> str:
+        """Quick yes/no pre-screening before full analysis."""
+        return """Look at this image carefully. Do you see damage on this wall? If you see damage answer true. If you do not see damage answer false.
+
+IMPORTANT: Only answer YES if you can clearly see actual damage to the structure.
+Answer NO if the white wall looks intact, clean, or undamaged.
+
+Respond ONLY in valid JSON format (no other text):
+{
+  "has_damage": true,
+  "confidence": 0.0,
+  "reason": "Brief reason for your answer"
+}
+
+Confidence: 0.0-1.0 (how certain you are)
+Only return has_damage=true if confidence >= 0.6"""
+
+    @staticmethod
     def structural_damage_analysis() -> str:
         """Prompt for comprehensive structural damage analysis."""
         return """Analyze this structural damage image carefully. Identify and classify all visible damage.

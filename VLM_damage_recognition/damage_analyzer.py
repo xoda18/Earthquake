@@ -56,7 +56,28 @@ class DamageAnalyzer:
         Returns:
             Structured damage report dict
         """
-        # Generate LLaVA analysis
+        # Step 1: Pre-screening — skip only if VERY confident there's no damage
+        screen_response = self.llava.analyze_image(image, DamagePrompts.has_damage_screening())
+        screen = DamagePrompts.parse_json_response(screen_response)
+        has_damage = screen.get("has_damage", True)  # default True = proceed to full analysis
+        screen_confidence = float(screen.get("confidence", 0.5))
+
+        # Only skip if model is very confident there is NO damage (has_damage=false + confidence >= 0.75)
+        if not has_damage and screen_confidence >= 0.75:
+            return DamageReportSchema.create_report(
+                file="",
+                lat=lat,
+                lon=lon,
+                severity="none",
+                confidence=screen_confidence,
+                damage_type="none",
+                description=screen.get("reason", "No structural damage detected."),
+                status="stable",
+                drone_id=drone_id,
+                building=building_name or "Structure",
+            )
+
+        # Step 2: Full damage analysis (only runs if damage confirmed)
         prompt = DamagePrompts.multi_aspect_analysis(include_building_type=True)
         raw_response = self.llava.analyze_image(image, prompt)
 
@@ -84,10 +105,10 @@ class DamageAnalyzer:
             building_type = parsed.get("building_type", "Unknown")
             building_name = building_type if building_type != "Unknown" else "Structure"
 
-        # Analyze detailed crack information if requested
+        # Step 3: Detailed crack analysis (only if damage confirmed and cracks mentioned)
         cracks = []
         overall_status = "unknown"
-        if include_crack_sizes and ("crack" in description.lower() or area_percent > 0):
+        if include_crack_sizes and confidence >= 0.6:
             crack_data = self._analyze_cracks_detailed(image)
             if crack_data and "cracks" in crack_data:
                 cracks = crack_data.get("cracks", [])
@@ -144,7 +165,7 @@ class DamageAnalyzer:
 
             # Convert crack array to standardized format
             standardized_cracks = []
-            for crack_info in crack_data.get("cracks", []):
+            for crack_info in [c for c in crack_data.get("cracks", []) if float(c.get("confidence", 0)) >= 0.6]:
                 crack = DamageReportSchema.create_crack(
                     crack_id=crack_info.get("id", len(standardized_cracks) + 1),
                     location=crack_info.get("location_region", "unknown"),
