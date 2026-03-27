@@ -88,33 +88,33 @@ class LSTMVisualizer:
         self.last_live_write = 0
 
     def write_live_data(self):
-        """Write latest sensor buffer to JSON file for web dashboard."""
+        """Write latest sensor buffer to local file + Supabase."""
         now = time.time()
-        if now - self.last_live_write < 0.3:  # max ~3 writes/sec
+        if now - self.last_live_write < 0.5:
             return
         self.last_live_write = now
         try:
             with self.lock:
                 data = {
-                    "t": list(self.times)[-200:],
-                    "x": list(self.data_x)[-200:],
-                    "y": list(self.data_y)[-200:],
-                    "z": list(self.data_z)[-200:],
-                    "mag": list(self.data_mag)[-200:],
-                    "prob": self.current_prob,
+                    "x": [round(v, 4) for v in list(self.data_x)[-100:]],
+                    "y": [round(v, 4) for v in list(self.data_y)[-100:]],
+                    "z": [round(v, 4) for v in list(self.data_z)[-100:]],
+                    "mag": [round(v, 4) for v in list(self.data_mag)[-100:]],
+                    "prob": round(self.current_prob, 4),
                     "label": self.current_label,
-                    "pga": self.peak_accel,
+                    "pga": round(self.peak_accel, 4),
                     "detections": self.detection_count,
                     "samples": self.total_samples,
-                    "elapsed": now - self.session_start,
-                    "prob_history": list(self.prob_history),
-                    "prob_times": list(self.prob_times),
+                    "elapsed": round(now - self.session_start, 1),
+                    "prob_history": [round(v, 4) for v in list(self.prob_history)],
                 }
+            # Local file
             tmp = LIVE_FILE + ".tmp"
             with open(tmp, "w") as f:
-                json.dumps(data)  # validate
                 f.write(json.dumps(data))
             os.replace(tmp, LIVE_FILE)
+            # Supabase
+            sb.insert("sensor_stream", {"data": json.dumps(data)})
         except Exception:
             pass
 
@@ -163,7 +163,22 @@ class LSTMVisualizer:
                     continue
 
                 raw = ser.readline().decode("utf-8", errors="ignore").strip()
-                if not raw or raw.startswith("timestamp") or raw.startswith("#"):
+                if not raw:
+                    # readline returned empty = timeout, check if Arduino hung
+                    if time.time() - self.last_sample_time > 3.0:
+                        print("\nArduino timeout — reconnecting...")
+                        try: ser.close()
+                        except Exception: pass
+                        time.sleep(0.5)
+                        ser = self._open_serial()
+                        if not ser:
+                            time.sleep(2)
+                            ser = self._open_serial()
+                            if not ser:
+                                print("Reconnect failed.")
+                                break
+                    continue
+                if raw.startswith("timestamp") or raw.startswith("#"):
                     continue
 
                 parts = raw.split(",")

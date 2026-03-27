@@ -28,7 +28,7 @@ DRONE_IP = "192.168.1.130"
 DRONE_PORT = 8080
 
 RISE_HEIGHT = 0.3
-MOVE_DISTANCE = 0.5
+MOVE_DISTANCE = 1.0
 NUM_PHOTOS = 3
 SETTLE_TIME = 2
 
@@ -47,7 +47,7 @@ def send_to_vlm(image_path, run_id=""):
                 f"{VLM_URL}/analyze",
                 files={"image": (filename, f, "image/jpeg")},
                 params={"run_id": run_id},
-                timeout=120,
+                timeout=600,
             )
         if resp.status_code == 200:
             result = resp.json()

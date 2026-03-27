@@ -1,0 +1,6 @@
+FROM python:3.13-slim
+WORKDIR /app
+RUN pip install --no-cache-dir requests
+COPY supabase_client.py .
+COPY drone/mock_damage.py ./drone/
+CMD ["python", "drone/mock_damage.py", "--loop", "15", "--count", "2"]

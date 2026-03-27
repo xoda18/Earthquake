@@ -45,7 +45,7 @@
 
   /* Sensor chart */
   .chart-box { background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:10px; }
-  .chart-box canvas { width:100%!important; height:120px!important; }
+  .chart-box canvas { width:100%!important; height:150px!important; display:block!important; }
   .chart-box .title { font-size:10px; color:var(--text2); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px; }
 
   /* Stat cards */
@@ -199,6 +199,7 @@ function addDamageMarker(r) {
 // ─── Charts ──────────────────────────────────────────────────────────
 const chartOpts = (extra={}) => ({
     responsive:true, maintainAspectRatio:false, animation:false,
+    elements: { line: { borderWidth: 2 }, point: { radius: 0 } },
     scales: {
         x:{display:false},
         y:{ticks:{color:'#8b949e',font:{size:9}}, grid:{color:'#21262d'}, ...extra}
@@ -209,9 +210,9 @@ const chartOpts = (extra={}) => ({
 const chartXYZ = new Chart(document.getElementById('chart-xyz').getContext('2d'), {
     type:'line',
     data:{labels:[], datasets:[
-        {label:'X', data:[], borderColor:'#ff6b6b', borderWidth:1, pointRadius:0, tension:0.2},
-        {label:'Y', data:[], borderColor:'#51cf66', borderWidth:1, pointRadius:0, tension:0.2},
-        {label:'Z', data:[], borderColor:'#339af0', borderWidth:1, pointRadius:0, tension:0.2},
+        {label:'X', data:[], borderColor:'#ff6b6b', borderWidth:2, pointRadius:0, tension:0.3},
+        {label:'Y', data:[], borderColor:'#51cf66', borderWidth:2, pointRadius:0, tension:0.3},
+        {label:'Z', data:[], borderColor:'#339af0', borderWidth:2, pointRadius:0, tension:0.3},
     ]},
     options:{...chartOpts(), plugins:{legend:{display:true,labels:{color:'#8b949e',font:{size:9},boxWidth:12}}}},
 });
@@ -243,14 +244,23 @@ let sensorConnected = false;
 async function fetchLive() {
     try {
         const resp = await fetch('/api/live');
-        const d = await resp.json();
+        let d = await resp.json();
         if (d.error) { sensorConnected = false; return; }
+
+        // Handle Supabase wrapper: {data: "json string"}
+        if (typeof d.data === 'string') {
+            try { d = JSON.parse(d.data); } catch(e) { return; }
+        } else if (d.data && typeof d.data === 'object' && d.data.x) {
+            d = d.data;
+        }
+
+        if (!d.x || !d.x.length) { sensorConnected = false; return; }
         sensorConnected = true;
 
         // XYZ chart
-        const labels = d.t ? d.t.map((_,i) => i) : [];
+        const labels = d.x.map((_,i) => i);
         chartXYZ.data.labels = labels;
-        chartXYZ.data.datasets[0].data = d.x || [];
+        chartXYZ.data.datasets[0].data = d.x;
         chartXYZ.data.datasets[1].data = d.y || [];
         chartXYZ.data.datasets[2].data = d.z || [];
         chartXYZ.update();
@@ -261,10 +271,9 @@ async function fetchLive() {
         chartMag.update();
 
         // Probability chart
-        if (d.prob_times && d.prob_times.length) {
-            const pt = d.prob_times;
-            const ph = d.prob_history || [];
-            chartProb.data.labels = pt.map((_,i) => i);
+        if (d.prob_history && d.prob_history.length) {
+            const ph = d.prob_history;
+            chartProb.data.labels = ph.map((_,i) => i);
             chartProb.data.datasets[0].data = ph;
             chartProb.data.datasets[0].backgroundColor = ph.map(p => p > 0.5 ? '#f85149' : '#3fb950');
             chartProb.update();
@@ -362,7 +371,7 @@ async function pollSlow() {
 
 pollFast();
 pollSlow();
-setInterval(pollFast, 500);   // live sensor: 2x/sec
+setInterval(pollFast, 500);   // live sensor: 2x/sec (reads local file, fast)
 setInterval(pollSlow, 5000);  // supabase history: every 5s
 </script>
 

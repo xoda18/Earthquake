@@ -1,5 +1,5 @@
 """
-Extra tools for EarthAgent — reads sensor and drone data from Supabase.
+Extra tools for EarthAgent — reads sensor, drone, and crack analysis data from Supabase.
 Tracks last-seen timestamps to avoid re-reporting old events.
 """
 
@@ -16,6 +16,7 @@ import supabase_client as sb
 _state = {
     "last_sensor_epoch": time.time(),   # start from NOW — ignore all old data
     "last_drone_epoch": time.time(),
+    "last_crack_epoch": time.time(),
 }
 
 
@@ -54,6 +55,23 @@ def read_drone_log(last_n: int = 10) -> str:
 
 
 @tool
+def read_crack_log(last_n: int = 10) -> str:
+    """Read the last N VLM crack analysis reports (for answering questions about crack status).
+    Does NOT update the tracking epoch — use get_new_crack_analyses for that.
+
+    Args:
+        last_n: Number of recent entries to return.
+
+    Returns:
+        JSON array of recent crack analysis reports, or '(no reports)'.
+    """
+    rows = sb.select("crack_reports", order_by="epoch", limit=last_n)
+    if not rows:
+        return "(no reports)"
+    return json.dumps(rows, indent=2)
+
+
+@tool
 def get_new_earthquakes() -> str:
     """Get earthquake detections that happened AFTER the last check.
     Automatically tracks the last-seen epoch. Returns only truly new events.
@@ -65,7 +83,6 @@ def get_new_earthquakes() -> str:
     rows = sb.select("sensor_events", order_by="created_at", limit=20,
                       since_epoch=_state["last_sensor_epoch"])
     if rows:
-        # Update tracking to newest epoch
         max_epoch = max(r.get("epoch", 0) for r in rows)
         if max_epoch > _state["last_sensor_epoch"]:
             _state["last_sensor_epoch"] = max_epoch
@@ -92,5 +109,29 @@ def get_new_damage_reports() -> str:
     return "[]"
 
 
+@tool
+def get_new_crack_analyses() -> str:
+    """Get VLM crack analysis reports that happened AFTER the last check.
+    Automatically tracks the last-seen epoch. Returns only truly new reports.
+    Each report includes: image_name, has_crack, severity, crack_count,
+    max_crack_length_mm, max_crack_width_mm, description, lat, lon, run_id.
+    If result is '[]' — there are no new crack analyses. Do NOT report anything.
+
+    Returns:
+        JSON array of new crack analysis reports since last check, or '[]' if none.
+    """
+    rows = sb.select("crack_reports", order_by="epoch", limit=20,
+                      since_epoch=_state["last_crack_epoch"])
+    if rows:
+        max_epoch = max(r.get("epoch", 0) for r in rows)
+        if max_epoch > _state["last_crack_epoch"]:
+            _state["last_crack_epoch"] = max_epoch
+        return json.dumps(rows, indent=2)
+    return "[]"
+
+
 def get_extra_tools():
-    return [read_sensor_log, read_drone_log, get_new_earthquakes, get_new_damage_reports]
+    return [
+        read_sensor_log, read_drone_log, read_crack_log,
+        get_new_earthquakes, get_new_damage_reports, get_new_crack_analyses,
+    ]
