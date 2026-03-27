@@ -297,6 +297,64 @@ For GeoTIFF issues:
 python -c "import rasterio; print(rasterio.__version__)"
 ```
 
+## Documentation
+
+### Damage Report Schema
+
+The system uses a **standardized JSON schema** for all damage reports:
+
+- **[DAMAGE_REPORT_SCHEMA_GUIDE.md](DAMAGE_REPORT_SCHEMA_GUIDE.md)** - Basic schema with required/optional fields
+- **[DETAILED_CRACK_SCHEMA_GUIDE.md](DETAILED_CRACK_SCHEMA_GUIDE.md)** - **NEW: Comprehensive per-crack measurements, location tracking, and temporal analysis**
+- **[CRACK_TRACKING_GUIDE.md](CRACK_TRACKING_GUIDE.md)** - Comparing multiple measurements over time
+
+### Key Features of New Schema
+
+✅ **Per-Crack Measurements** - Each crack has detailed dimensions (length, width, depth)
+✅ **Location Coordinates** - Region-based and normalized pixel coordinates
+✅ **Individual Severity & Status** - Each crack can have different severity (low/moderate/high/critical) and status (stable/growing/recovering/unknown)
+✅ **Summary Statistics** - Automatically calculated from crack array
+✅ **Expandable Format** - Add custom fields as needed
+✅ **Database Ready** - JSONB compatible for Supabase and other databases
+
+### Example Report Output
+
+```json
+{
+  "file": "photo.jpg",
+  "lat": 34.765,
+  "lon": 32.42,
+  "severity": "critical",
+  "status": "growing",
+  "confidence": 0.92,
+  "cracks": [
+    {
+      "id": 1,
+      "location": "top-left",
+      "measurements": {
+        "length_mm": 450,
+        "width_mm": 5.0,
+        "depth_estimate": "deep",
+        "area_mm2": 2250,
+        "pattern": "straight"
+      },
+      "severity": "critical",
+      "status": "growing",
+      "confidence": 0.92,
+      "description": "Vertical crack with progressive widening",
+      "normalized_coords": {"x": 0.15, "y": 0.25}
+    }
+  ],
+  "_summary_statistics": {
+    "total_cracks": 1,
+    "total_crack_area_mm2": 2250,
+    "largest_crack_length_mm": 450,
+    "crack_density": "moderate"
+  }
+}
+```
+
+See `test_results/analysis_metadata.json` for complete examples.
+
 ## Advanced Configuration
 
 Edit `config.yaml`:

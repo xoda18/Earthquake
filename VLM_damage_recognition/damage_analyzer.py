@@ -12,6 +12,7 @@ from PIL import Image
 from .inference import LLaVAInference
 from .image_processor import ImageProcessor
 from .prompt_templates import DamagePrompts
+from .damage_report_schema import DamageReportSchema
 
 
 class DamageAnalyzer:
@@ -38,7 +39,8 @@ class DamageAnalyzer:
         lat: float,
         lon: float,
         building_name: Optional[str] = None,
-        drone_id: str = "JASS-DRONE-01"
+        drone_id: str = "JASS-DRONE-01",
+        include_crack_sizes: bool = True
     ) -> Dict[str, Any]:
         """
         Analyze single image for structural damage.
@@ -49,6 +51,7 @@ class DamageAnalyzer:
             lon: Longitude
             building_name: Optional building name/type
             drone_id: Drone identifier
+            include_crack_sizes: Include detailed crack size analysis
 
         Returns:
             Structured damage report dict
@@ -81,27 +84,114 @@ class DamageAnalyzer:
             building_type = parsed.get("building_type", "Unknown")
             building_name = building_type if building_type != "Unknown" else "Structure"
 
-        # Create damage report matching existing schema
-        report = {
-            "event_id": str(uuid.uuid4()),
-            "epoch": time.time(),
-            "lat": lat,
-            "lon": lon,
-            "severity": severity,
-            "damage_type": ", ".join(damage_types) if damage_types else "Unknown damage",
-            "building": building_name,
-            "description": description,
-            "drone_id": drone_id,
-            "confidence": confidence,
-            # Additional VLM-specific fields
-            "_vlm_analysis": {
-                "area_percent": area_percent,
-                "affected_elements": parsed.get("affected_elements", []),
-                "raw_response": raw_response,
+        # Analyze detailed crack information if requested
+        cracks = []
+        overall_status = "unknown"
+        if include_crack_sizes and ("crack" in description.lower() or area_percent > 0):
+            crack_data = self._analyze_cracks_detailed(image)
+            if crack_data and "cracks" in crack_data:
+                cracks = crack_data.get("cracks", [])
+                overall_status = crack_data.get("overall_status", "unknown")
+
+        # Determine overall status from cracks
+        if cracks:
+            statuses = [c.get("status", "unknown") for c in cracks]
+            if "growing" in statuses:
+                overall_status = "growing"
+            elif "recovering" in statuses:
+                overall_status = "recovering"
+            elif all(s == "stable" for s in statuses):
+                overall_status = "stable"
+
+        # Create standardized damage report using schema
+        report = DamageReportSchema.create_report(
+            file="",  # Will be set by caller
+            lat=lat,
+            lon=lon,
+            severity=severity,
+            confidence=confidence,
+            damage_type=", ".join(damage_types) if damage_types else "Unknown damage",
+            description=description,
+            status=overall_status,
+            drone_id=drone_id,
+            building=building_name,
+            cracks=cracks if cracks else None,
+            additional_data={
+                "_vlm_analysis": {
+                    "area_percent": area_percent,
+                    "affected_elements": parsed.get("affected_elements", []),
+                    "raw_response": raw_response,
+                }
             }
-        }
+        )
 
         return report
+
+    def _analyze_cracks_detailed(self, image: Image.Image) -> Optional[Dict[str, Any]]:
+        """
+        Analyze all cracks in detail with location and status tracking.
+
+        Args:
+            image: PIL Image
+
+        Returns:
+            Detailed crack data with individual crack objects or None
+        """
+        try:
+            prompt = DamagePrompts.detailed_crack_tracking()
+            raw_response = self.llava.analyze_image(image, prompt)
+            crack_data = DamagePrompts.parse_json_response(raw_response)
+
+            # Convert crack array to standardized format
+            standardized_cracks = []
+            for crack_info in crack_data.get("cracks", []):
+                crack = DamageReportSchema.create_crack(
+                    crack_id=crack_info.get("id", len(standardized_cracks) + 1),
+                    location=crack_info.get("location_region", "unknown"),
+                    measurements=crack_info.get("measurements", {}),
+                    severity=crack_info.get("severity", "moderate"),
+                    status=crack_info.get("status", "unknown"),
+                    confidence=float(crack_info.get("confidence", 0.85)),
+                    description=crack_info.get("description", ""),
+                    normalized_coords=crack_info.get("normalized_coords"),
+                )
+                standardized_cracks.append(crack)
+
+            return {
+                "cracks": standardized_cracks,
+                "overall_status": crack_data.get("overall_status", "unknown"),
+                "summary_statistics": crack_data.get("summary_statistics", {}),
+                "confidence": float(crack_data.get("confidence", 0.85)),
+                "scale_assumption": crack_data.get("scale_assumption", "1m x 1m (1000mm x 1000mm)"),
+            }
+        except Exception as e:
+            print(f"[WARN] Detailed crack analysis failed: {e}")
+            return None
+
+    def _analyze_crack_sizes(self, image: Image.Image) -> Optional[Dict[str, Any]]:
+        """
+        Analyze crack sizes in image (assumes 1m x 1m scale).
+        Legacy method - kept for backwards compatibility.
+
+        Args:
+            image: PIL Image
+
+        Returns:
+            Crack measurements dict or None
+        """
+        try:
+            prompt = DamagePrompts.crack_size_analysis()
+            raw_response = self.llava.analyze_image(image, prompt)
+            crack_data = DamagePrompts.parse_json_response(raw_response)
+
+            # Add scale information
+            crack_data["scale_assumption"] = "1m x 1m (1000mm x 1000mm) if no reference scale visible"
+            crack_data["measurement_unit"] = "millimeters"
+
+            return crack_data
+        except Exception as e:
+            print(f"[WARN] Crack size analysis failed: {e}")
+            return None
 
     def analyze_batch(
         self,
