@@ -1,0 +1,85 @@
+# VLM Damage Recognition Configuration
+
+# Model settings
+model:
+  # HuggingFace model ID
+  model_id: "llava-hf/llava-1.5-7b-hf"
+  # Alternative smaller models:
+  # - "llava-hf/llava-1.5-13b-hf" (more capable, requires more VRAM)
+  # - Custom fine-tuned models
+
+  # Max tokens for generation
+  max_new_tokens: 512
+
+  # Use int8 quantization for CPU inference
+  quantize: false
+
+  # Device: "cuda", "mps", or "cpu" (auto-detected)
+  device: "auto"
+
+# Analysis settings
+analysis:
+  # Confidence threshold for reporting
+  confidence_threshold: 0.3
+
+  # Temperature for model sampling (0.0-1.0, lower = more deterministic)
+  temperature: 0.7
+
+  # Top-p nucleus sampling (0.0-1.0)
+  top_p: 0.9
+
+# Damage severity thresholds
+severity:
+  # Area percentage thresholds
+  low_threshold: 5
+  moderate_threshold: 15
+  high_threshold: 50
+  # Above high_threshold = critical
+
+  # Confidence boost for high-area damage
+  area_multiplier: 1.0
+
+# Output settings
+output:
+  # Write to Supabase by default
+  supabase_write: false
+
+  # Save JSON reports to this file (empty = don't save)
+  json_output: ""
+
+  # Verbose logging
+  verbose: true
+
+# Drone metadata
+drone:
+  default_id: "JASS-DRONE-01"
+  default_altitude: 50  # meters
+
+# Input settings
+input:
+  # Supported formats
+  supported_formats:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".tif"
+    - ".tiff"
+    - ".geotiff"
+
+  # Generate random Paphos coordinates if not found in image
+  generate_default_coords: true
+
+# Paphos coordinates (for default fallback)
+paphos_zones:
+  zone1:
+    lat: [34.755, 34.775]
+    lon: [32.415, 32.435]
+  zone2:
+    lat: [34.750, 34.760]
+    lon: [32.418, 32.430]
+  zone3:
+    lat: [34.770, 34.785]
+    lon: [32.420, 32.445]
+  zone4:
+    lat: [34.760, 34.778]
+    lon: [32.435, 32.460]
