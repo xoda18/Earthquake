@@ -149,6 +149,13 @@
       </div>
     </div>
 
+    <button id="launch-drone-btn" onclick="launchDrone()" style="
+      width:100%; padding:12px; margin-bottom:10px;
+      background:var(--red); color:#fff; border:none; border-radius:8px;
+      font-size:14px; font-weight:700; cursor:pointer; letter-spacing:0.5px;
+      transition: opacity 0.2s;
+    ">LAUNCH DRONE</button>
+
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
       <div class="stat">
         <div class="label">Damage Zones</div>
@@ -360,6 +367,40 @@ function updateStatus() {
 }
 
 // ─── Poll ────────────────────────────────────────────────────────────
+async function launchDrone() {
+    const btn = document.getElementById('launch-drone-btn');
+    btn.textContent = 'LAUNCHING...';
+    btn.style.opacity = '0.5';
+    btn.disabled = true;
+    try {
+        const orchUrl = localStorage.getItem('ORCHESTRATOR_URL') || 'http://localhost:5050';
+        const resp = await fetch(orchUrl + '/pipeline/trigger', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({step: 'drone_scan'}),
+        });
+        if (resp.ok) {
+            btn.textContent = 'DRONE LAUNCHED';
+            btn.style.background = 'var(--green)';
+            document.getElementById('drone-status-text').textContent = 'Scanning...';
+            document.getElementById('drone-status-text').style.color = 'var(--yellow)';
+            document.getElementById('drone-icon').textContent = '✈';
+        } else {
+            btn.textContent = 'FAILED — RETRY';
+            btn.style.background = 'var(--orange)';
+        }
+    } catch(e) {
+        btn.textContent = 'OFFLINE — RETRY';
+        btn.style.background = 'var(--orange)';
+    }
+    setTimeout(() => {
+        btn.textContent = 'LAUNCH DRONE';
+        btn.style.background = 'var(--red)';
+        btn.style.opacity = '1';
+        btn.disabled = false;
+    }, 5000);
+}
+
 async function pollFast() {
     await fetchLive();
     updateStatus();

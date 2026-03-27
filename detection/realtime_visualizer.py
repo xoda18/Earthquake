@@ -88,9 +88,10 @@ class LSTMVisualizer:
         self.last_live_write = 0
 
     def write_live_data(self):
-        """Write latest sensor buffer to local file + Supabase."""
+        """Write latest sensor buffer to local file. Supabase writes throttled."""
         now = time.time()
-        if now - self.last_live_write < 0.5:
+        # Local file every 0.3s
+        if now - self.last_live_write < 0.3:
             return
         self.last_live_write = now
         try:
@@ -108,13 +109,24 @@ class LSTMVisualizer:
                     "elapsed": round(now - self.session_start, 1),
                     "prob_history": [round(v, 4) for v in list(self.prob_history)],
                 }
-            # Local file
+            data_json = json.dumps(data)
+            # Local file (instant)
             tmp = LIVE_FILE + ".tmp"
             with open(tmp, "w") as f:
-                f.write(json.dumps(data))
+                f.write(data_json)
             os.replace(tmp, LIVE_FILE)
-            # Supabase
-            sb.insert("sensor_stream", {"data": json.dumps(data)})
+            # Supabase only every 2 sec, reuse single thread
+            if not hasattr(self, '_sb_busy'):
+                self._sb_busy = False
+                self._sb_last = 0
+            if not self._sb_busy and (now - self._sb_last) > 2.0:
+                self._sb_busy = True
+                self._sb_last = now
+                def _send(d):
+                    try: sb.insert("sensor_stream", {"data": d})
+                    except: pass
+                    self._sb_busy = False
+                threading.Thread(target=_send, args=(data_json,), daemon=True).start()
         except Exception:
             pass
 
