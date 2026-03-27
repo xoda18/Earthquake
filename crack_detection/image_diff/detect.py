@@ -12,6 +12,8 @@ import os
 import sys
 from datetime import datetime
 
+import requests
+
 import cv2
 import numpy as np
 from pupil_apriltags import Detector
@@ -21,6 +23,7 @@ from pipeline.preprocessing import (
     compute_canonical_frame,
     normalize_to_canonical,
     histogram_match_l_channel,
+    wall_scan_crop,
 )
 from pipeline.alignment import (
     compute_homography,
@@ -107,7 +110,94 @@ def parse_args():
              "Thin lines ~0.1-0.2, compact objects ~0.4+. 0 = no filter.",
     )
 
+    # ── Wall-scan crop mode ───────────────────────────────────────────
+    p.add_argument(
+        "--wall-scan", action="store_true",
+        help="Wall-scan crop mode: crop a single image to the AprilTag-defined "
+             "block region and save to --output-resize-dir",
+    )
+    p.add_argument(
+        "--image", type=str, default=None,
+        help="Path to a single image (used with --wall-scan)",
+    )
+    p.add_argument(
+        "--first-block", action="store_true",
+        help="First block in wall sequence (no overlap trimming)",
+    )
+    p.add_argument(
+        "--trim-edges", nargs="+",
+        choices=["left", "right", "top", "bottom"],
+        default=["left", "right"],
+        help="Edges to trim for overlap removal on non-first blocks",
+    )
+    p.add_argument(
+        "--output-resize-dir", default="output_resize",
+        help="Output directory for wall-scan cropped images",
+    )
+
     return p.parse_args()
+
+
+# ── Wall-scan crop ────────────────────────────────────────────────────────
+def process_wall_scan(args):
+    """Detect two AprilTags, classify their arrangement, crop, and save."""
+    if not args.image:
+        print("[ERROR] --wall-scan requires --image <path>")
+        sys.exit(1)
+
+    print(f"\nWall-Scan Crop Mode")
+    print(f"  Image:       {args.image}")
+    print(f"  First block: {args.first_block}")
+    if not args.first_block:
+        print(f"  Trim edges:  {args.trim_edges}")
+
+    image = cv2.imread(args.image, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"[ERROR] Cannot read {args.image}")
+        sys.exit(1)
+    print(f"  Image shape: {image.shape}")
+
+    # Detect any AprilTags (auto-discovery)
+    detector = Detector(families=args.tag_family, quad_decimate=1.0)
+    tags = detect_tags(image, detector, None, "wall-scan image")
+    del detector
+
+    if len(tags) < 2:
+        print(f"[ERROR] Need at least 2 AprilTags, found {len(tags)}")
+        sys.exit(1)
+
+    if len(tags) > 2:
+        # Keep the pair whose centres are furthest apart (the diagonal pair)
+        ids = list(tags.keys())
+        best_pair = (ids[0], ids[1])
+        max_dist = 0
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                d = np.linalg.norm(
+                    tags[ids[i]].mean(axis=0) - tags[ids[j]].mean(axis=0)
+                )
+                if d > max_dist:
+                    max_dist = d
+                    best_pair = (ids[i], ids[j])
+        print(f"  Found {len(tags)} tags, using diagonal pair: {best_pair}")
+        tags = {tid: tags[tid] for tid in best_pair}
+
+    print(f"  Tags detected: {sorted(tags.keys())}")
+
+    cropped, crop_rect, arrangement = wall_scan_crop(
+        image, tags,
+        first_block=args.first_block,
+        trim_edges=args.trim_edges,
+    )
+
+    # Save cropped image
+    os.makedirs(args.output_resize_dir, exist_ok=True)
+    basename = os.path.splitext(os.path.basename(args.image))[0]
+    output_path = os.path.join(args.output_resize_dir, f"{basename}_cropped.png")
+    cv2.imwrite(output_path, cropped)
+    print(f"  Saved: {output_path}")
+
+    return output_path
 
 
 # ── Pipeline ─────────────────────────────────────────────────────────────
@@ -288,6 +378,11 @@ def process_pair(date_suffix, before_path, after_path, args):
 
 def main():
     args = parse_args()
+
+    if args.wall_scan:
+        process_wall_scan(args)
+        return
+
     print("Building Change Detection")
     print(f"  Input:       {args.input_dir}")
     print(f"  Output:      {args.output_dir}")
@@ -320,6 +415,27 @@ def main():
     for date_suffix, pct, mx, sev in results:
         print(f"{date_suffix:<15} {pct:>9.1f}% {mx:>10.3f} {sev:>10}")
     print()
+
+    notify_orchestrator(results)
+
+
+def notify_orchestrator(results):
+    """Notify orchestrator that image diff is complete."""
+    url = os.environ.get("ORCHESTRATOR_URL", "")
+    if not url:
+        return
+    severities = [sev for _, _, _, sev in results]
+    worst = max(severities, key=lambda s: ["low", "moderate", "high", "critical"].index(s)
+                if s in ["low", "moderate", "high", "critical"] else 0) if severities else "none"
+    try:
+        requests.post(f"{url}/step/done", json={
+            "step": "image_diff",
+            "status": "success",
+            "detail": f"pairs={len(results)} worst_severity={worst}",
+        }, timeout=5)
+        print(f"[orchestrator] Notified: image_diff done")
+    except Exception as e:
+        print(f"[orchestrator] Failed to notify: {e}")
 
 
 if __name__ == "__main__":

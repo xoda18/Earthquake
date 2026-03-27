@@ -5,6 +5,9 @@ from .preprocessing import (
     compute_canonical_frame,
     normalize_to_canonical,
     histogram_match_l_channel,
+    get_tag_size,
+    classify_tag_positions,
+    wall_scan_crop,
 )
 from .alignment import (
     compute_homography,

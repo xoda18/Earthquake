@@ -6,7 +6,10 @@ Shared Supabase REST client — used by sensor, drone, and swarm tools.
 import requests
 
 SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
-SUPABASE_KEY = "YOUR_SUPABASE_SERVICE_KEY"
+SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"
+SUPABASE_SERVICE_KEY = "YOUR_SUPABASE_SERVICE_KEY"
+# Use service key for server-side operations (insert/select)
+SUPABASE_KEY = SUPABASE_SERVICE_KEY
 
 _HEADERS = {
     "apikey": SUPABASE_KEY,

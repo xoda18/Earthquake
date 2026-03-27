@@ -4,7 +4,11 @@ import sys
 import time
 import threading
 from datetime import datetime
+
+import requests
 from DJIControlClient import DJIControlClient
+
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "")
 
 # ---- Configuration ----
 DRONE_IP = "192.168.1.119"
@@ -111,62 +115,73 @@ def scan_wall():
     stream = LatestFrameCapture(STREAM_URL)
     print("Stream OK")
 
-    # Connect to drone
-    print(f"Connecting to drone at {DRONE_IP}:{DRONE_PORT}...")
-    client = DJIControlClient(DRONE_IP, DRONE_PORT)
-    print("Drone connected")
+    # # Connect to drone
+    # print(f"Connecting to drone at {DRONE_IP}:{DRONE_PORT}...")
+    # client = DJIControlClient(DRONE_IP, DRONE_PORT)
+    # print("Drone connected")
 
     try:
-        # Take off
-        print("\n[1] Taking off...")
-        client.takeOff()
-        time.sleep(10)
+        # # Take off
+        # print("\n[1] Taking off...")
+        # client.takeOff()
+        # time.sleep(10)
 
-        # Rise to scanning height
-        print(f"[2] Rising {RISE_HEIGHT}m...")
-        client.moveUp(RISE_HEIGHT)
-        time.sleep(SETTLE_TIME)
+        # # Rise to scanning height
+        # print(f"[2] Rising {RISE_HEIGHT}m...")
+        # client.moveUp(RISE_HEIGHT)
+        # time.sleep(SETTLE_TIME)
 
-        # Capture 4 images, moving right between each
-        for i in range(NUM_PHOTOS):
-            print(f"\n--- Photo {i + 1}/{NUM_PHOTOS} ---")
+        # # Capture 4 images, moving right between each
+        # for i in range(NUM_PHOTOS):
+        #     print(f"\n--- Photo {i + 1}/{NUM_PHOTOS} ---")
+        #
+        #     print(f"  Moving right {MOVE_DISTANCE}m...")
+        #     client.moveRight(MOVE_DISTANCE)
+        #     time.sleep(SETTLE_TIME)
+        #
+        #     print(f"  Waiting {STREAM_CATCHUP_TIME}s for stream to catch up...")
+        #     time.sleep(STREAM_CATCHUP_TIME)
+        #
+        #     photo_path = os.path.join(output_dir, f"wall_{i + 1}.jpg")
+        #     capture_and_save(stream, photo_path)
 
-            print(f"  Moving right {MOVE_DISTANCE}m...")
-            client.moveRight(MOVE_DISTANCE)
-            time.sleep(SETTLE_TIME)
+        # Just capture one shot to test
+        print("Waiting 3s for a fresh frame...")
+        time.sleep(3)
+        photo_path = os.path.join(output_dir, "test_shot.jpg")
+        capture_and_save(stream, photo_path)
 
-            print(f"  Waiting {STREAM_CATCHUP_TIME}s for stream to catch up...")
-            time.sleep(STREAM_CATCHUP_TIME)
+        # # Return to start position
+        # total_distance = NUM_PHOTOS * MOVE_DISTANCE
+        # print(f"\n[3] Returning: moving left {total_distance}m...")
+        # client.moveLeft(total_distance)
+        # time.sleep(SETTLE_TIME)
 
-            photo_path = os.path.join(output_dir, f"wall_{i + 1}.jpg")
-            capture_and_save(stream, photo_path)
-
-        # Return to start position
-        total_distance = NUM_PHOTOS * MOVE_DISTANCE
-        print(f"\n[3] Returning: moving left {total_distance}m...")
-        client.moveLeft(total_distance)
-        time.sleep(SETTLE_TIME)
-
-        # Land
-        print("[4] Landing...")
-        client.land()
-        time.sleep(5)
-        client.confirmLanding()
-        print("Landed successfully")
+        # # Land
+        # print("[4] Landing...")
+        # client.land()
+        # time.sleep(5)
+        # client.confirmLanding()
+        # print("Landed successfully")
 
     except Exception as e:
-        print(f"\nERROR during flight: {e}")
-        print("Attempting emergency landing...")
-        try:
-            client.land()
-            time.sleep(5)
-            client.confirmLanding()
-        except Exception:
-            print("Emergency landing failed!")
+        print(f"\nERROR: {e}")
     finally:
         stream.release()
 
-    print(f"\nDone! Images saved in: {output_dir}")
+    print(f"\nDone! Image saved in: {output_dir}")
+
+    # Notify orchestrator that drone scan is complete
+    if ORCHESTRATOR_URL:
+        try:
+            requests.post(f"{ORCHESTRATOR_URL}/step/done", json={
+                "step": "drone_scan",
+                "status": "success",
+                "detail": f"images_dir={output_dir}",
+            }, timeout=5)
+            print("[orchestrator] Notified: drone_scan done")
+        except Exception as e:
+            print(f"[orchestrator] Failed to notify: {e}")
 
 
 if __name__ == "__main__":
