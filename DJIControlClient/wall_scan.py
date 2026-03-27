@@ -31,6 +31,7 @@ RISE_HEIGHT = 0.3
 MOVE_DISTANCE = 1.0
 NUM_PHOTOS = 3
 SETTLE_TIME = 2
+HEADING_TOLERANCE = 5  # degrees — correct if drift exceeds this
 
 DEFAULT_SCANS_DIR = os.path.join(os.path.dirname(__file__), "scans")
 
@@ -38,6 +39,21 @@ DEFAULT_SCANS_DIR = os.path.join(os.path.dirname(__file__), "scans")
 # ---------------------------------------------------------------------------
 # VLM + orchestrator helpers
 # ---------------------------------------------------------------------------
+def correct_heading(client, initial_heading):
+    """If the drone has drifted more than HEADING_TOLERANCE degrees, rotate back."""
+    current_heading = client.getHeading()  # returns a number
+    delta = (current_heading - initial_heading + 180) % 360 - 180  # normalise to [-180, 180]
+    if abs(delta) <= HEADING_TOLERANCE:
+        return
+    print(f"  [heading] Drift detected: {delta:+.1f}° (current={current_heading:.1f}, initial={initial_heading:.1f})")
+    if delta > 0:
+        client.rotateCounterClockwise(delta)
+    else:
+        client.rotateClockwise(-delta)
+    time.sleep(SETTLE_TIME)
+    print(f"  [heading] Corrected → {client.getHeading():.1f}°")
+
+
 def send_to_vlm(image_path, run_id=""):
     """POST an image to the VLM /analyze endpoint for crack analysis."""
     filename = os.path.basename(image_path)
@@ -115,6 +131,10 @@ def scan_wall():
         client.moveUp(RISE_HEIGHT)
         time.sleep(SETTLE_TIME)
 
+        # Record initial heading so we can correct drift later
+        initial_heading = client.getHeading()  # returns a number
+        print(f"  Initial heading: {initial_heading:.1f}°")
+
         # Capture images, moving right between each
         for i in range(NUM_PHOTOS):
             print(f"\n--- Photo {i + 1}/{NUM_PHOTOS} ---")
@@ -122,6 +142,9 @@ def scan_wall():
             print(f"  Moving right {MOVE_DISTANCE}m...")
             client.moveRight(MOVE_DISTANCE)
             time.sleep(SETTLE_TIME)
+
+            # Correct heading drift before capturing
+            correct_heading(client, initial_heading)
 
             photo_path = os.path.join(output_dir, f"wall_{i + 1}.jpg")
             client.takeImage(photo_path)

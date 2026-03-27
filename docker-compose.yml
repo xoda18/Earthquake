@@ -1,25 +1,62 @@
 # ==========================================================================
 # Earthquake Intelligence System — Docker Compose
 #
-# Full pipeline:
-#   orchestrator + vlm-analyzer  (always-on services)
-#   earthquake-detector          (continuous sensor reading)
-#   drone-scanner, image-cropper, db-cleanup  (on-demand, launched by orchestrator)
-#
-# Quick start (single machine):
-#   docker compose up --build
-#
-# Two machines:
-#   Machine A (GPU):  docker compose up orchestrator vlm-analyzer earthquake-detector --build
-#   Machine B (drone): VLM_URL=http://<GPU_IP>:5060 docker compose up drone-scanner --build
-#
-# Manual pipeline trigger (skip earthquake detection):
-#   curl -X POST http://localhost:5050/pipeline/trigger \
-#     -H "Content-Type: application/json" \
-#     -d '{"step": "drone_scan"}'
+# Profiles:
+#   ./launch.sh misha                       — VLM with NVIDIA GPU
+#   ./launch.sh alex                        — VLM on Mac MPS (native) + rest in Docker
+#   ./launch.sh valik --vlm-ip <MISHA_IP>  — everything in Docker, VLM on Misha's GPU
+#   ./launch.sh all                         — everything in Docker (CPU, no GPU)
 # ==========================================================================
 
+x-vlm-base: &vlm-base
+  build:
+    context: .
+    dockerfile: vlm/Dockerfile
+  ports:
+    - "5060:5060"
+  environment: &vlm-env
+    MODEL_ID: "${MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
+    QUANTIZE: "${QUANTIZE:-false}"
+    SUPABASE_URL: "${SUPABASE_URL:-https://YOUR_PROJECT.supabase.co}"
+    SUPABASE_KEY: "${SUPABASE_KEY:-YOUR_SUPABASE_SERVICE_KEY}"
+    ALERT_URL: "${ALERT_URL:-https://blackboard.jass.school/blackboard}"
+    STORAGE_BUCKET: "${STORAGE_BUCKET:-crack-images}"
+    ORCHESTRATOR_URL: "${ORCHESTRATOR_URL:-}"
+  volumes:
+    - hf-cache:/root/.cache/huggingface
+  restart: unless-stopped
+
 services:
+  # ------------------------------------------------------------------
+  # VLM — Misha (NVIDIA GPU in Docker)
+  # ------------------------------------------------------------------
+  vlm-analyzer-gpu:
+    <<: *vlm-base
+    container_name: vlm-analyzer
+    environment:
+      <<: *vlm-env
+      QUANTIZE: "true"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - misha
+
+  # ------------------------------------------------------------------
+  # VLM — CPU fallback (for 'all' profile)
+  # For 'alex', VLM runs natively outside Docker with MPS
+  # For 'valik', VLM is on Misha's machine
+  # ------------------------------------------------------------------
+  vlm-analyzer-cpu:
+    <<: *vlm-base
+    container_name: vlm-analyzer
+    profiles:
+      - all
+
   # ------------------------------------------------------------------
   # Dashboard — Web UI (port 8080)
   # ------------------------------------------------------------------
@@ -30,27 +67,48 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+    profiles:
+      - alex
+      - valik
+      - all
 
   # ------------------------------------------------------------------
   # Orchestrator — Pipeline controller (port 5050)
-  # Receives step-done notifications, launches next step
   # ------------------------------------------------------------------
   orchestrator:
     build:
       context: .
-      dockerfile: Dockerfile.dashboard
+      dockerfile: orchestrator/Dockerfile
     ports:
       - "5050:5050"
     environment:
-      VLM_URL: "http://vlm-analyzer:5060"
+      VLM_URL: "${VLM_URL:-http://vlm-analyzer:5060}"
       ORCHESTRATOR_URL: "http://orchestrator:5050"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
+    profiles:
+      - alex
+      - valik
+      - all
+
+  # ------------------------------------------------------------------
+  # Drone Scanner — captures or simulates wall images, sends to VLM
+  # ------------------------------------------------------------------
+  drone-scanner:
+    build:
+      context: DJIControlClient
+      dockerfile: Dockerfile
+    environment:
+      VLM_URL: "${VLM_URL:-http://vlm-analyzer:5060}"
+      ORCHESTRATOR_URL: "${ORCHESTRATOR_URL:-}"
+    profiles:
+      - alex
+      - valik
+      - all
 
   # ------------------------------------------------------------------
   # Earthquake Detector — LSTM classifier reading Arduino sensor
-  # Runs continuously; POSTs to orchestrator when earthquake detected
   # ------------------------------------------------------------------
   earthquake-detector:
     build:
@@ -61,71 +119,13 @@ services:
     devices:
       - "${SERIAL_PORT:-/dev/ttyACM0}:/dev/ttyACM0"
     restart: unless-stopped
-    depends_on:
-      - orchestrator
-
-  # ------------------------------------------------------------------
-  # VLM Analyzer — LLaVA crack detection API server (port 5060)
-  # Always-on; orchestrator POSTs /run to trigger batch analysis
-  # ------------------------------------------------------------------
-  vlm-analyzer:
-    build:
-      context: .
-      dockerfile: vlm/Dockerfile
-    ports:
-      - "5060:5060"
-    environment:
-      MODEL_ID: "${MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
-      QUANTIZE: "${QUANTIZE:-false}"
-      SUPABASE_URL: "${SUPABASE_URL:-https://YOUR_PROJECT.supabase.co}"
-      SUPABASE_KEY: "${SUPABASE_KEY:-YOUR_SUPABASE_SERVICE_KEY}"
-      ALERT_URL: "${ALERT_URL:-https://blackboard.jass.school/blackboard}"
-      STORAGE_BUCKET: "${STORAGE_BUCKET:-crack-images}"
-      ORCHESTRATOR_URL: "http://orchestrator:5050"
-    volumes:
-      - hf-cache:/root/.cache/huggingface
-      - ./crack_detection/image_diff/output_cropped:/app/input
-    restart: unless-stopped
-    depends_on:
-      - orchestrator
-    # GPU acceleration disabled (nvidia-container-toolkit not installed)
-    # Uncomment below when nvidia-container-toolkit is available:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-
-  # ------------------------------------------------------------------
-  # Drone Scanner — captures or simulates wall images, sends to VLM
-  # Launched on-demand by orchestrator (profile: no auto-start)
-  # ------------------------------------------------------------------
-  drone-scanner:
-    build:
-      context: DJIControlClient
-      dockerfile: Dockerfile
-    environment:
-      VLM_URL: "${VLM_URL:-http://vlm-analyzer:5060}"
-      ORCHESTRATOR_URL: "http://orchestrator:5050"
     profiles:
-      - on-demand
+      - alex
+      - valik
+      - all
 
   # ------------------------------------------------------------------
-  # Drone Mock — simulated drone for demo mode
-  # ------------------------------------------------------------------
-  drone-mock:
-    build:
-      context: .
-      dockerfile: Dockerfile.drone
-    restart: unless-stopped
-    profiles:
-      - demo  # only runs with: docker compose --profile demo up
-
-  # ------------------------------------------------------------------
-  # Image Cropper — AprilTag detection + crop
-  # Launched on-demand by orchestrator
+  # Image Cropper — on-demand
   # ------------------------------------------------------------------
   image-cropper:
     build:
@@ -140,8 +140,7 @@ services:
       - on-demand
 
   # ------------------------------------------------------------------
-  # DB Cleanup — removes old data from Supabase
-  # Launched on-demand by orchestrator as final pipeline step
+  # DB Cleanup — on-demand
   # ------------------------------------------------------------------
   db-cleanup:
     build:

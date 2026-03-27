@@ -27,7 +27,8 @@ class LLaVAInference:
         """
         self.model_id = model_id
         self.device = self._detect_device()
-        self.quantize = quantize and self.device == "cpu"
+        # bitsandbytes quantization only works on CUDA
+        self.quantize = quantize and self.device == "cuda"
 
         print(f"[LLaVA] Device: {self.device}, Quantize: {self.quantize}")
         print(f"[LLaVA] Loading model: {model_id}")
@@ -35,15 +36,39 @@ class LLaVAInference:
         # Load processor
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
 
-        # Load model (quantization via load_in_8bit is deprecated, use normal loading)
-        self.model = LlavaForConditionalGeneration.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-            trust_remote_code=True,
-        )
+        # Load model — strategy depends on device
+        if self.quantize:
+            # CUDA only: int8 quantization via bitsandbytes
+            self.model = LlavaForConditionalGeneration.from_pretrained(
+                model_id,
+                load_in_8bit=True,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+        elif self.device == "cuda":
+            self.model = LlavaForConditionalGeneration.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+        elif self.device == "mps":
+            # MPS: no device_map="auto", manually move to MPS
+            self.model = LlavaForConditionalGeneration.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                trust_remote_code=True,
+            ).to("mps")
+        else:
+            # CPU fallback
+            self.model = LlavaForConditionalGeneration.from_pretrained(
+                model_id,
+                torch_dtype=torch.float32,
+                trust_remote_code=True,
+            )
 
         self.model.eval()
-        print("[LLaVA] Model loaded successfully")
+        print(f"[LLaVA] Model loaded successfully on {self.device}")
 
     @staticmethod
     def _detect_device() -> str:
@@ -67,8 +92,21 @@ class LLaVAInference:
         Returns:
             Model response text
         """
-        # Prepare inputs
-        inputs = self.processor(text=prompt, images=image, return_tensors="pt").to(self.device)
+        # Build conversation for the processor's chat template
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": prompt},
+                ],
+            },
+        ]
+
+        # Let the processor handle image token placement
+        text = self.processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = self.processor(text=text, images=image, return_tensors="pt")
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
         # Generate response
         with torch.no_grad():
@@ -76,16 +114,11 @@ class LLaVAInference:
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
-                temperature=0.7,
-                top_p=0.9,
             )
 
-        # Decode response
-        response = self.processor.decode(output_ids[0], skip_special_tokens=True)
-
-        # Extract only the response part (after prompt)
-        if "Assistant:" in response:
-            response = response.split("Assistant:")[-1].strip()
+        # Decode only the NEW tokens (skip the input prompt tokens)
+        input_len = inputs["input_ids"].shape[-1]
+        response = self.processor.decode(output_ids[0][input_len:], skip_special_tokens=True).strip()
 
         return response
 

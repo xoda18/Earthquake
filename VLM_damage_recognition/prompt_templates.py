@@ -199,26 +199,22 @@ Respond in JSON:
     @staticmethod
     def multi_aspect_analysis(include_building_type: bool = False) -> str:
         """Combined prompt for multiple aspects."""
-        prompt = """Analyze this structural damage image comprehensively.
+        prompt = """Look at this image of a building. Describe any structural damage you see.
 
-Respond ONLY in valid JSON format:
-{
-  "damage_types": ["list", "of", "identified", "damage", "types"],
-  "severity": "low|moderate|high|critical",
-  "severity_confidence": 0.0,
-  "damage_area_percent": 0,
-  "affected_elements": ["structural", "elements", "involved"],
-  "description": "Detailed description of all observed damage"
-}"""
+Answer in JSON with these fields:
+- "damage_types": array of damage types found (e.g. "crack", "spalling", "collapse")
+- "severity": one of "low", "moderate", "high", "critical"
+- "confidence": number 0.0 to 1.0
+- "damage_area_percent": estimated percent of area affected (0-100)
+- "affected_elements": array of affected parts (e.g. "wall", "column", "roof")
+- "description": one paragraph describing the damage"""
 
         if include_building_type:
             prompt += """
-Additionally, identify the building type:
-{
-  ...
-  "building_type": "residential|commercial|industrial|institutional|other",
-  "building_confidence": 0.0
-}"""
+- "building_type": one of "residential", "commercial", "industrial", "institutional", "other"
+"""
+
+        prompt += "\nRespond with ONLY the JSON object, no other text."
 
         return prompt
 

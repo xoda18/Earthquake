@@ -159,6 +159,17 @@ def get_previous_run(current_run_id: str) -> list[dict]:
         return []
 
 
+def get_previous_report_for_image(current_run_id: str, image_name: str) -> dict | None:
+    """Fetch the previous run's report for the SAME image name (wall_1 vs wall_1)."""
+    prev_reports = get_previous_run(current_run_id)
+    if not prev_reports:
+        return None
+    for r in prev_reports:
+        if r.get("image_name") == image_name:
+            return r
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Alerts
 # ---------------------------------------------------------------------------
@@ -244,11 +255,10 @@ async def analyze(image: UploadFile = File(...), run_id: str = ""):
     save_crack_report(report, run_id, image_url)
     reporter.write_report(report)
 
-    # 4. Compare with previous run
-    prev_reports = get_previous_run(run_id)
+    # 4. Compare with previous run — match by image name (wall_1 vs wall_1)
+    prev_report = get_previous_report_for_image(run_id, filename)
     comparison = None
-    if prev_reports:
-        # Build a comparable dict from the VLM report
+    if prev_report:
         current_comparable = [{
             "image_name": filename,
             "has_crack": report.get("severity", "none") != "none",
@@ -263,7 +273,11 @@ async def analyze(image: UploadFile = File(...), run_id: str = ""):
                 default=0,
             ),
         }]
-        comparison = compare_runs(current_comparable, prev_reports)
+        comparison = compare_runs(current_comparable, [prev_report])
+        log.info(f"Compared {filename} with previous run: {comparison.get('status')}")
+    else:
+        comparison = {"summary": "First scan — no previous data for this image.", "status": "new"}
+        log.info(f"No previous data for {filename}")
 
     # 5. Alert if damage found
     alert_sent = False
@@ -339,12 +353,22 @@ async def run_batch(req: BatchRequest):
             ),
         })
 
-    # Compare with previous run
+    # Compare with previous run — match each image by name
     prev_reports = get_previous_run(run_id)
     comparison = None
     if prev_reports:
-        comparison = compare_runs(current_comparables, prev_reports)
-        log.info(f"Run comparison:\n{json.dumps(comparison, indent=2)}")
+        # Filter previous reports to only those with matching image names
+        prev_by_name = {r.get("image_name"): r for r in prev_reports}
+        matched_prev = [prev_by_name[c["image_name"]] for c in current_comparables
+                        if c["image_name"] in prev_by_name]
+        matched_curr = [c for c in current_comparables if c["image_name"] in prev_by_name]
+        if matched_prev:
+            comparison = compare_runs(matched_curr, matched_prev)
+            log.info(f"Run comparison:\n{json.dumps(comparison, indent=2)}")
+        else:
+            comparison = {"summary": "No matching images in previous run to compare.", "status": "new"}
+    else:
+        comparison = {"summary": "First scan — no previous run data.", "status": "new"}
 
     # Send alerts
     for report in reports:
