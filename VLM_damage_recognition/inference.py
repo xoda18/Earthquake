@@ -116,6 +116,10 @@ class LLaVAInference:
                 do_sample=False,
             )
 
+        # Free CUDA cache after inference to avoid OOM on next call
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+
         # Decode only the NEW tokens (skip the input prompt tokens)
         input_len = inputs["input_ids"].shape[-1]
         response = self.processor.decode(output_ids[0][input_len:], skip_special_tokens=True).strip()

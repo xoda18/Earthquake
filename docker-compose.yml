@@ -22,6 +22,7 @@ x-vlm-base: &vlm-base
     ALERT_URL: "${ALERT_URL:-https://blackboard.jass.school/blackboard}"
     STORAGE_BUCKET: "${STORAGE_BUCKET:-crack-images}"
     ORCHESTRATOR_URL: "${ORCHESTRATOR_URL:-}"
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   volumes:
     - hf-cache:/root/.cache/huggingface
   restart: unless-stopped
