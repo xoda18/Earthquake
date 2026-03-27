@@ -66,7 +66,7 @@ reporter: SupabaseReporter | None = None
 def load_model():
     global analyzer, reporter
     log.info(f"Loading LLaVA model: {MODEL_ID}")
-    analyzer = DamageAnalyzer(quantize=False, model_id=MODEL_ID)
+    analyzer = DamageAnalyzer(quantize=QUANTIZE, model_id=MODEL_ID)
     reporter = SupabaseReporter(use_supabase=True)
     log.info("Model loaded and ready.")
 

@@ -7,7 +7,7 @@ and optional quantization for CPU inference.
 
 import os
 import torch
-from transformers import AutoProcessor, LlavaForConditionalGeneration
+from transformers import AutoProcessor, LlavaForConditionalGeneration, BitsAndBytesConfig
 from PIL import Image
 import warnings
 
@@ -38,10 +38,11 @@ class LLaVAInference:
 
         # Load model — strategy depends on device
         if self.quantize:
-            # CUDA only: int8 quantization via bitsandbytes
+            # CUDA only: 8-bit quantization via bitsandbytes (fits 7B model in 8GB VRAM)
+            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
             self.model = LlavaForConditionalGeneration.from_pretrained(
                 model_id,
-                load_in_8bit=True,
+                quantization_config=bnb_config,
                 device_map="auto",
                 trust_remote_code=True,
             )
