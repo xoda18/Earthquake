@@ -51,6 +51,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def do_DELETE(self):
+        # DELETE /api/drone?id=xxx
+        if self.path.startswith("/api/drone?id="):
+            rid = self.path.split("id=")[1]
+            ok = sb.delete("drone_reports", "event_id", rid)
+            if not ok:
+                ok = sb.delete("drone_reports", "id", rid)
+            self.json_response({"ok": ok})
+        else:
+            self.json_response({"error": "unknown"})
+
     def raw_json(self, text):
         body = text.encode() if isinstance(text, str) else json.dumps(text).encode()
         self.send_response(200)

@@ -149,11 +149,10 @@
       </div>
     </div>
 
-    <button id="launch-drone-btn" onclick="launchDrone()" style="
+    <button id="launch-drone-btn" onclick="launchDrone()" disabled style="
       width:100%; padding:12px; margin-bottom:10px;
-      background:var(--red); color:#fff; border:none; border-radius:8px;
-      font-size:14px; font-weight:700; cursor:pointer; letter-spacing:0.5px;
-      transition: opacity 0.2s;
+      background:#555; color:#999; border:none; border-radius:8px;
+      font-size:14px; font-weight:700; cursor:not-allowed; letter-spacing:0.5px;
     ">LAUNCH DRONE</button>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -176,7 +175,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // ─── Map ─────────────────────────────────────────────────────────────
-const map = L.map('map', { zoomControl: false }).setView([34.765, 32.425], 14);
+const map = L.map('map', { zoomControl: false }).setView([34.7559714, 32.4356786], 15);
 L.control.zoom({ position: 'topright' }).addTo(map);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; CartoDB',
@@ -198,7 +197,8 @@ function addDamageMarker(r) {
         <b style="color:${c}">${(r.severity||'').toUpperCase()}</b><br>
         ${r.damage_type||'Damage'}<br>${r.building||''}<br>
         <span style="color:#8b949e">${r.lat?.toFixed(5)}, ${r.lon?.toFixed(5)}</span><br>
-        Confidence: ${((r.confidence||0)*100).toFixed(0)}%
+        Confidence: ${((r.confidence||0)*100).toFixed(0)}%<br>
+        <button onclick="fixDamage('${id}')" style="margin-top:8px;padding:6px 14px;font-size:11px;font-weight:700;background:#20c997;color:#fff;border:2px solid #20c997;border-radius:6px;cursor:pointer;width:100%;box-shadow:0 2px 4px rgba(0,0,0,0.3);letter-spacing:0.5px">✓ MARK AS FIXED</button>
     `);
     markers[id] = circle;
 }
@@ -298,6 +298,24 @@ async function fetchLive() {
         document.getElementById('pga-value').textContent = pga.toFixed(3) + 'g';
         document.getElementById('pga-value').style.color = pga > 0.1 ? 'var(--red)' : 'var(--white)';
 
+        // Activate drone button for 20 sec after earthquake
+        if (isEq && !window._droneActive) {
+            window._droneActive = true;
+            const btn = document.getElementById('launch-drone-btn');
+            btn.disabled = false;
+            btn.style.background = 'var(--red)';
+            btn.style.color = '#fff';
+            btn.style.cursor = 'pointer';
+            clearTimeout(window._droneTimer);
+            window._droneTimer = setTimeout(() => {
+                btn.disabled = true;
+                btn.style.background = '#555';
+                btn.style.color = '#999';
+                btn.style.cursor = 'not-allowed';
+                window._droneActive = false;
+            }, 20000);
+        }
+
     } catch(e) { sensorConnected = false; }
 }
 
@@ -348,15 +366,44 @@ async function fetchDrone() {
         logEl.innerHTML = droneData.slice(0, 15).map(r => {
             const t = r.created_at ? new Date(r.created_at).toLocaleTimeString() : '—';
             const sev = r.severity || 'low';
-            return `<div class="event">
+            const rid = r.event_id || r.id;
+            return `<div class="event" style="cursor:pointer" onclick="flyTo(${r.lat},${r.lon},'${rid}')">
                 <span class="badge ${sev}">${sev}</span>
                 ${r.damage_type || 'Damage'} <span style="color:var(--text2)">at ${r.building||'—'}</span>
                 <div class="time">${r.lat?.toFixed(4)}, ${r.lon?.toFixed(4)} — ${t}</div>
+                <button onclick="event.stopPropagation();fixDamage('${rid}')" style="
+                    margin-top:6px;padding:6px 16px;font-size:11px;font-weight:700;
+                    background:#20c997;color:#fff;border:2px solid #20c997;border-radius:6px;
+                    cursor:pointer;display:block;width:100%;text-align:center;
+                    box-shadow:0 2px 4px rgba(0,0,0,0.3);letter-spacing:0.5px;
+                ">✓ MARK AS FIXED</button>
             </div>`;
         }).join('');
 
         lastDroneEpoch = Math.max(...droneData.map(r => r.epoch || 0));
     } catch(e) { console.error('drone fetch:', e); }
+}
+
+function flyTo(lat, lon, id) {
+    map.flyTo([lat, lon], 18, {duration: 0.8});
+    if (markers[id]) markers[id].openPopup();
+}
+
+async function fixDamage(id) {
+    // Delete from Supabase
+    await fetch('/api/drone?id=' + id, {method: 'DELETE'});
+    // Remove marker from map
+    if (markers[id]) { map.removeLayer(markers[id]); delete markers[id]; }
+    // Remove from local data
+    droneData = droneData.filter(r => (r.event_id||r.id) != id);
+    // Update counters
+    let total=0, critical=0;
+    for (const r of droneData) { total++; if(r.severity==='critical') critical++; }
+    document.getElementById('damage-count').textContent = total;
+    document.getElementById('critical-count').textContent = critical;
+    // Close popup and re-render
+    map.closePopup();
+    fetchDrone();
 }
 
 function updateStatus() {

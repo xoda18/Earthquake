@@ -19,9 +19,14 @@
 #define ACCEL_XOUT_H  0x3B
 #define ACCEL_CONFIG  0x1C
 
+const int BUZZER_PIN = 13;
+const int LED_PIN = 12;
 const float ACCEL_SCALE = 16384.0;  // ±2g
 unsigned long start_time_ms;
 unsigned long last_good_read = 0;
+bool alarm_active = false;
+unsigned long alarm_start = 0;
+const unsigned long ALARM_DURATION = 6000;  // 6 seconds of siren
 
 void writeReg(uint8_t reg, uint8_t val) {
   Wire.beginTransmission(MPU_ADDR);
@@ -64,6 +69,11 @@ void setup() {
 
   initMPU();
 
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  noTone(BUZZER_PIN);
+  digitalWrite(LED_PIN, LOW);
+
   // Enable hardware watchdog — resets Arduino if loop() hangs for >4 sec
   wdt_enable(WDTO_4S);
 
@@ -74,6 +84,48 @@ void setup() {
 
 void loop() {
   wdt_reset();  // feed watchdog — prevents reset while running normally
+
+  // Check for BUZZ command from Python
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd == "BUZZ") {
+      alarm_active = true;
+      alarm_start = millis();
+    } else if (cmd == "STOP") {
+      alarm_active = false;
+      noTone(BUZZER_PIN);
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
+
+  // Siren alarm — escalating woop-woop
+  if (alarm_active) {
+    unsigned long elapsed = millis() - alarm_start;
+    if (elapsed >= ALARM_DURATION) {
+      alarm_active = false;
+      noTone(BUZZER_PIN);
+      digitalWrite(LED_PIN, LOW);
+    } else {
+      // Phase repeats every 800ms: sweep 800Hz → 3000Hz then drop
+      unsigned long phase = elapsed % 800;
+      int freq;
+      if (phase < 600) {
+        // Rising sweep — peaks at 4kHz (loudest for small buzzers)
+        freq = 2000 + (phase * 2000 / 600);
+      } else {
+        // Quick staccato drop
+        freq = (phase % 100 < 50) ? 4000 : 800;
+      }
+      // Every other cycle goes higher for panic effect
+      if ((elapsed / 800) % 2 == 1) {
+        freq = freq * 5 / 4;  // +25% pitch = 5kHz peak
+      }
+      tone(BUZZER_PIN, freq);
+      // LED blinks fast — 100ms on/off
+      digitalWrite(LED_PIN, (elapsed / 100) % 2 == 0 ? HIGH : LOW);
+    }
+  }
 
   // If no good read for 2 seconds, try I2C recovery
   if (millis() - last_good_read > 2000) {

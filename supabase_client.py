@@ -43,6 +43,22 @@ def insert(table: str, row: dict) -> bool:
         return False
 
 
+def delete(table: str, column: str, value: str) -> bool:
+    """Delete rows where column=value. Returns True on success."""
+    if not _check_config():
+        return False
+    try:
+        resp = requests.delete(
+            f"{SUPABASE_URL}/rest/v1/{table}?{column}=eq.{value}",
+            headers=_HEADERS,
+            timeout=5,
+        )
+        return resp.status_code in (200, 204)
+    except Exception as e:
+        print(f"Supabase delete error: {e}")
+        return False
+
+
 def select(table: str, order_by: str = "created_at", limit: int = 10, since_epoch: float = 0) -> list:
     """Select recent rows from a Supabase table. Returns list of dicts."""
     if not _check_config():

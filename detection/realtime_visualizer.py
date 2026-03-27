@@ -51,7 +51,7 @@ LIVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_liv
 
 class LSTMVisualizer:
 
-    def __init__(self, port, duration=600):
+    def __init__(self, port, duration=0):
         self.port = port
         self.duration = duration
         self.running = False
@@ -86,6 +86,7 @@ class LSTMVisualizer:
         self.inference_window = None
         self.last_sample_time = time.time()
         self.last_live_write = 0
+        self.ser = None  # serial connection (set by reader_thread)
 
     def write_live_data(self):
         """Write latest sensor buffer to local file. Supabase writes throttled."""
@@ -141,6 +142,7 @@ class LSTMVisualizer:
                 ser.readline()
             print(f"Connected to {self.port}")
             self.last_sample_time = time.time()
+            self.ser = ser
             return ser
         except Exception as e:
             print(f"Serial error: {e}")
@@ -156,7 +158,7 @@ class LSTMVisualizer:
         start = time.time()
 
         try:
-            while self.running and (time.time() - start) < self.duration:
+            while self.running and (self.duration == 0 or (time.time() - start) < self.duration):
                 # Check for Arduino hang (no data for 3 seconds)
                 if time.time() - self.last_sample_time > 3.0:
                     print("\nArduino hang detected — reconnecting...")
@@ -281,6 +283,12 @@ class LSTMVisualizer:
                 if label == "EARTHQUAKE" and not self.last_was_earthquake:
                     self.detection_count += 1
                     self.log_earthquake(prob, pga, last_ax, last_ay, last_az, last_mag)
+                    # Trigger buzzer on Arduino
+                    if self.ser and self.ser.is_open:
+                        try:
+                            self.ser.write(b"BUZZ\n")
+                        except Exception:
+                            pass
                 self.last_was_earthquake = (label == "EARTHQUAKE")
 
     def setup_figure(self):
@@ -440,7 +448,7 @@ class LSTMVisualizer:
 def main():
     parser = argparse.ArgumentParser(description="Real-time LSTM earthquake visualizer")
     parser.add_argument("--port", type=str, required=True)
-    parser.add_argument("--duration", type=int, default=600)
+    parser.add_argument("--duration", type=int, default=0)
     args = parser.parse_args()
     LSTMVisualizer(port=args.port, duration=args.duration).run()
 

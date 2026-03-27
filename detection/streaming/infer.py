@@ -243,6 +243,13 @@ def main():
                     if is_eq:
                         threading.Thread(target=notify_orchestrator, args=(bb_data,), daemon=True).start()
 
+                # Trigger buzzer on Arduino when earthquake detected
+                if is_eq and ser and ser.is_open:
+                    try:
+                        ser.write(b"BUZZ\n")
+                    except Exception:
+                        pass
+
     except KeyboardInterrupt:
         pass
     finally:
