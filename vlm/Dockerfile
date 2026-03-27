@@ -6,10 +6,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install VLM dependencies (LLaVA + FastAPI)
+# Big packages first (cached separately so timeout retries don't re-download torch)
 COPY VLM_damage_recognition/requirements.txt /tmp/vlm_requirements.txt
+RUN pip install --no-cache-dir -r /tmp/vlm_requirements.txt
+
+# Small packages on top
 RUN pip install --no-cache-dir \
-    -r /tmp/vlm_requirements.txt \
     fastapi uvicorn[standard] python-multipart accelerate bitsandbytes
 
 # Copy VLM damage recognition module

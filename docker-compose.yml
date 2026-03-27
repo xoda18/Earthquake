@@ -1,6 +1,28 @@
-version: "3.8"
+# ==========================================================================
+# Earthquake Intelligence System — Docker Compose
+#
+# Full pipeline:
+#   orchestrator + vlm-analyzer  (always-on services)
+#   earthquake-detector          (continuous sensor reading)
+#   drone-scanner, image-cropper, db-cleanup  (on-demand, launched by orchestrator)
+#
+# Quick start (single machine):
+#   docker compose up --build
+#
+# Two machines:
+#   Machine A (GPU):  docker compose up orchestrator vlm-analyzer earthquake-detector --build
+#   Machine B (drone): VLM_URL=http://<GPU_IP>:5060 docker compose up drone-scanner --build
+#
+# Manual pipeline trigger (skip earthquake detection):
+#   curl -X POST http://localhost:5050/pipeline/trigger \
+#     -H "Content-Type: application/json" \
+#     -d '{"step": "drone_scan"}'
+# ==========================================================================
 
 services:
+  # ------------------------------------------------------------------
+  # Dashboard — Web UI (port 8080)
+  # ------------------------------------------------------------------
   dashboard:
     build:
       context: .
@@ -9,6 +31,88 @@ services:
       - "8080:8080"
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # Orchestrator — Pipeline controller (port 5050)
+  # Receives step-done notifications, launches next step
+  # ------------------------------------------------------------------
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "5050:5050"
+    environment:
+      VLM_URL: "http://vlm-analyzer:5060"
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # Earthquake Detector — LSTM classifier reading Arduino sensor
+  # Runs continuously; POSTs to orchestrator when earthquake detected
+  # ------------------------------------------------------------------
+  earthquake-detector:
+    build:
+      context: .
+      dockerfile: detection/streaming/Dockerfile
+    environment:
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    devices:
+      - "${SERIAL_PORT:-/dev/ttyACM0}:/dev/ttyACM0"
+    restart: unless-stopped
+    depends_on:
+      - orchestrator
+
+  # ------------------------------------------------------------------
+  # VLM Analyzer — LLaVA crack detection API server (port 5060)
+  # Always-on; orchestrator POSTs /run to trigger batch analysis
+  # ------------------------------------------------------------------
+  vlm-analyzer:
+    build:
+      context: .
+      dockerfile: vlm/Dockerfile
+    ports:
+      - "5060:5060"
+    environment:
+      MODEL_ID: "${MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
+      QUANTIZE: "${QUANTIZE:-true}"
+      SUPABASE_URL: "${SUPABASE_URL:-https://YOUR_PROJECT.supabase.co}"
+      SUPABASE_KEY: "${SUPABASE_KEY:-YOUR_SUPABASE_SERVICE_KEY}"
+      ALERT_URL: "${ALERT_URL:-https://blackboard.jass.school/blackboard}"
+      STORAGE_BUCKET: "${STORAGE_BUCKET:-crack-images}"
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+    depends_on:
+      - orchestrator
+    # Uncomment below to enable GPU acceleration (requires nvidia-container-toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ------------------------------------------------------------------
+  # Drone Scanner — captures or simulates wall images, sends to VLM
+  # Launched on-demand by orchestrator (profile: no auto-start)
+  # ------------------------------------------------------------------
+  drone-scanner:
+    build:
+      context: DJIControlClient
+      dockerfile: Dockerfile
+    environment:
+      VLM_URL: "${VLM_URL:-http://vlm-analyzer:5060}"
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    profiles:
+      - on-demand
+
+  # ------------------------------------------------------------------
+  # Drone Mock — simulated drone for demo mode
+  # ------------------------------------------------------------------
   drone-mock:
     build:
       context: .
@@ -16,3 +120,37 @@ services:
     restart: unless-stopped
     profiles:
       - demo  # only runs with: docker compose --profile demo up
+
+  # ------------------------------------------------------------------
+  # Image Cropper — AprilTag detection + crop
+  # Launched on-demand by orchestrator
+  # ------------------------------------------------------------------
+  image-cropper:
+    build:
+      context: .
+      dockerfile: crack_detection/image_diff/Dockerfile.crop
+    environment:
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    volumes:
+      - ./crack_detection/image_diff/input:/app/input
+      - ./crack_detection/image_diff/output_cropped:/app/output
+    profiles:
+      - on-demand
+
+  # ------------------------------------------------------------------
+  # DB Cleanup — removes old data from Supabase
+  # Launched on-demand by orchestrator as final pipeline step
+  # ------------------------------------------------------------------
+  db-cleanup:
+    build:
+      context: .
+      dockerfile: db_cleanup/Dockerfile
+    environment:
+      SUPABASE_URL: "${SUPABASE_URL:-https://YOUR_PROJECT.supabase.co}"
+      SUPABASE_KEY: "${SUPABASE_KEY:-YOUR_SUPABASE_SERVICE_KEY}"
+      ORCHESTRATOR_URL: "http://orchestrator:5050"
+    profiles:
+      - on-demand
+
+volumes:
+  hf-cache:

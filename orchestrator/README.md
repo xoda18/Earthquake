@@ -16,6 +16,19 @@ earthquake_detected → drone_scan → image_crop → vlm_analysis → db_cleanu
 | `vlm_analysis` | `vlm-analyzer` | HTTP service (always-on) | Sends cropped images to VLM, saves images to Supabase Storage, writes crack analysis to DB, compares with previous run, sends GPS alert. |
 | `db_cleanup` | `db-cleanup` | Container (on-demand) | Removes old data from Supabase, keeps 2 versions. Runs last. |
 
+## HOW TO RUN
+The earhquake detector is launched with 
+```bash
+docker compose up earthquake-detector -d
+```
+
+An orchestrator which does all other things once the event happend is launched with 
+```bash
+docker compose up orchestrator vlm-analyzer -d
+
+```
+
+
 ## Architecture
 
 ```
