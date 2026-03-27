@@ -84,10 +84,12 @@ services:
       ORCHESTRATOR_URL: "http://orchestrator:5050"
     volumes:
       - hf-cache:/root/.cache/huggingface
+      - ./crack_detection/image_diff/output_cropped:/app/input
     restart: unless-stopped
     depends_on:
       - orchestrator
-    # Uncomment below to enable GPU acceleration (requires nvidia-container-toolkit)
+    # GPU acceleration disabled (nvidia-container-toolkit not installed)
+    # Uncomment below when nvidia-container-toolkit is available:
     # deploy:
     #   resources:
     #     reservations:
