@@ -45,6 +45,9 @@ BG_EARTHQUAKE = "#3f1a1a"
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import supabase_client as sb
 
+# Live data file for web dashboard
+LIVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_live.json")
+
 
 class LSTMVisualizer:
 
@@ -82,6 +85,38 @@ class LSTMVisualizer:
         self.inference_ready = threading.Event()
         self.inference_window = None
         self.last_sample_time = time.time()
+        self.last_live_write = 0
+
+    def write_live_data(self):
+        """Write latest sensor buffer to JSON file for web dashboard."""
+        now = time.time()
+        if now - self.last_live_write < 0.3:  # max ~3 writes/sec
+            return
+        self.last_live_write = now
+        try:
+            with self.lock:
+                data = {
+                    "t": list(self.times)[-200:],
+                    "x": list(self.data_x)[-200:],
+                    "y": list(self.data_y)[-200:],
+                    "z": list(self.data_z)[-200:],
+                    "mag": list(self.data_mag)[-200:],
+                    "prob": self.current_prob,
+                    "label": self.current_label,
+                    "pga": self.peak_accel,
+                    "detections": self.detection_count,
+                    "samples": self.total_samples,
+                    "elapsed": now - self.session_start,
+                    "prob_history": list(self.prob_history),
+                    "prob_times": list(self.prob_times),
+                }
+            tmp = LIVE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dumps(data)  # validate
+                f.write(json.dumps(data))
+            os.replace(tmp, LIVE_FILE)
+        except Exception:
+            pass
 
     def _open_serial(self):
         """Open serial port, return connection or None."""
@@ -163,6 +198,8 @@ class LSTMVisualizer:
                         self.samples_since_inference = 0
                         self.inference_window = np.array(self.lstm_buffer)
                         self.inference_ready.set()
+
+                self.write_live_data()
 
         except Exception as e:
             print(f"Reader error: {e}")
